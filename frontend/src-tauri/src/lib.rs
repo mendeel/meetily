@@ -51,6 +51,7 @@ pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
 pub mod nemotron_engine;
+pub mod qwen_engine;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -704,6 +705,8 @@ pub fn run() {
             api::api_get_meeting,
             api::api_get_meeting_metadata,
             api::api_get_meeting_transcripts,
+            api::api_set_speaker_alias,
+            api::api_get_meeting_speakers,
             api::api_save_meeting_title,
             api::api_save_transcript,
             api::open_meeting_folder,
