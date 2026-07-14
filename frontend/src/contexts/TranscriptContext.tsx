@@ -7,6 +7,7 @@ import { useRecordingState } from './RecordingStateContext';
 import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
+import { formatTranscriptExportLine } from '@/lib/speakerLabels';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -180,10 +181,57 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   // Main transcript buffering logic with sequence_id ordering
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
+    let unlistenSpeakerFn: (() => void) | undefined;
     let transcriptCounter = 0;
     let transcriptBuffer = new Map<number, Transcript>();
     let lastProcessedSequence = 0;
     let processingTimer: NodeJS.Timeout | undefined;
+
+    const sortByTimeThenSeq = (a: Transcript, b: Transcript) => {
+      const chunkTimeDiff = (a.chunk_start_time || 0) - (b.chunk_start_time || 0);
+      if (chunkTimeDiff !== 0) return chunkTimeDiff;
+      return (a.sequence_id || 0) - (b.sequence_id || 0);
+    };
+
+    /** Upsert by sequence_id — used for partials and speaker/text replacements */
+    const upsertTranscriptBySequence = (update: TranscriptUpdate, existingId?: string) => {
+      const newTranscript: Transcript = {
+        id: existingId ?? `${Date.now()}-${transcriptCounter++}`,
+        text: update.text,
+        timestamp: update.timestamp,
+        sequence_id: update.sequence_id,
+        chunk_start_time: update.chunk_start_time,
+        is_partial: update.is_partial,
+        confidence: update.confidence,
+        audio_start_time: update.audio_start_time,
+        audio_end_time: update.audio_end_time,
+        duration: update.duration,
+        speaker: update.speaker,
+        channel: update.channel,
+      };
+
+      setTranscripts(prev => {
+        const idx = prev.findIndex(t => t.sequence_id === update.sequence_id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = {
+            ...prev[idx],
+            text: update.text,
+            timestamp: update.timestamp,
+            is_partial: update.is_partial,
+            confidence: update.confidence,
+            audio_start_time: update.audio_start_time ?? prev[idx].audio_start_time,
+            audio_end_time: update.audio_end_time ?? prev[idx].audio_end_time,
+            duration: update.duration ?? prev[idx].duration,
+            chunk_start_time: update.chunk_start_time ?? prev[idx].chunk_start_time,
+            speaker: update.speaker ?? prev[idx].speaker,
+            channel: update.channel ?? prev[idx].channel,
+          };
+          return next;
+        }
+        return [...prev, newTranscript].sort(sortByTimeThenSeq);
+      });
+    };
 
     const processBufferedTranscripts = (forceFlush = false) => {
       const sortedTranscripts: Transcript[] = [];
@@ -292,11 +340,30 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             text: update.text.substring(0, 50) + '...',
             timestamp: update.timestamp,
             is_partial: update.is_partial,
+            speaker: update.speaker,
+            channel: update.channel,
             received_at: new Date(now).toISOString(),
             buffer_size_before: transcriptBuffer.size
           });
 
-          // Check for duplicate sequence_id before processing
+          // Save to IndexedDB (non-blocking)
+          if (currentMeetingId) {
+            indexedDBService.saveTranscript(currentMeetingId, update)
+              .catch(err => console.warn('IndexedDB save failed:', err));
+          }
+
+          // Partials and updates to an already-displayed sequence_id: upsert in place
+          const alreadyDisplayed = transcriptsRef.current.some(
+            t => t.sequence_id === update.sequence_id
+          );
+          if (update.is_partial || alreadyDisplayed) {
+            // Drop any buffered entry so we don't re-add as a duplicate later
+            transcriptBuffer.delete(update.sequence_id);
+            upsertTranscriptBySequence(update);
+            return;
+          }
+
+          // Check for duplicate sequence_id before buffering new finals
           if (transcriptBuffer.has(update.sequence_id)) {
             console.log('🚫 MAIN LISTENER: Duplicate sequence_id, skipping buffer:', update.sequence_id);
             return;
@@ -311,21 +378,16 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             chunk_start_time: update.chunk_start_time,
             is_partial: update.is_partial,
             confidence: update.confidence,
-            // NEW: Recording-relative timestamps for playback sync
             audio_start_time: update.audio_start_time,
             audio_end_time: update.audio_end_time,
             duration: update.duration,
+            speaker: update.speaker,
+            channel: update.channel,
           };
 
           // Add to buffer
           transcriptBuffer.set(update.sequence_id, newTranscript);
           console.log(`✅ MAIN LISTENER: Buffered transcript with sequence_id ${update.sequence_id}. Buffer size: ${transcriptBuffer.size}, Last processed: ${lastProcessedSequence}`);
-
-          // Save to IndexedDB (non-blocking)
-          if (currentMeetingId) {
-            indexedDBService.saveTranscript(currentMeetingId, update)
-              .catch(err => console.warn('IndexedDB save failed:', err));
-          }
 
           // Clear any existing timer and set a new one
           if (processingTimer) {
@@ -335,6 +397,19 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
           // Process buffer with minimal delay for immediate UI updates (serial workers = sequential order)
           processingTimer = setTimeout(processBufferedTranscripts, 10);
         });
+
+        // Neural diarization may emit speaker-only relabels
+        unlistenSpeakerFn = await transcriptService.onTranscriptSpeakerUpdate((update) => {
+          console.log('🏷️ SPEAKER UPDATE:', update.sequence_id, update.speaker);
+          setTranscripts(prev => {
+            const idx = prev.findIndex(t => t.sequence_id === update.sequence_id);
+            if (idx < 0) return prev;
+            const next = [...prev];
+            next[idx] = { ...prev[idx], speaker: update.speaker };
+            return next;
+          });
+        });
+
         console.log('✅ MAIN transcript listener setup complete');
       } catch (error) {
         console.error('❌ Failed to setup MAIN transcript listener:', error);
@@ -354,6 +429,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       if (unlistenFn) {
         unlistenFn();
         console.log('🧹 CLEANUP: MAIN transcript listener cleaned up');
+      }
+      if (unlistenSpeakerFn) {
+        unlistenSpeakerFn();
       }
     };
   }, [currentMeetingId]); // Add currentMeetingId dependency
@@ -383,6 +461,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             audio_start_time: segment.audio_start_time,
             audio_end_time: segment.audio_end_time,
             duration: segment.duration,
+            speaker: segment.speaker,
+            channel: segment.channel,
           }));
 
           setTranscripts(formattedTranscripts);
@@ -410,7 +490,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       sequence_id: update.sequence_id,
       text: update.text.substring(0, 50) + '...',
       timestamp: update.timestamp,
-      is_partial: update.is_partial
+      is_partial: update.is_partial,
+      speaker: update.speaker,
     });
 
     const newTranscript: Transcript = {
@@ -424,12 +505,31 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       audio_start_time: update.audio_start_time,
       audio_end_time: update.audio_end_time,
       duration: update.duration,
+      speaker: update.speaker,
+      channel: update.channel,
     };
 
     setTranscripts(prev => {
       console.log('📊 Current transcripts count before update:', prev.length);
 
-      // Check if this transcript already exists
+      // Upsert by sequence_id (partials / speaker updates)
+      const existingIdx = prev.findIndex(t => t.sequence_id === update.sequence_id);
+      if (existingIdx >= 0) {
+        const next = [...prev];
+        next[existingIdx] = {
+          ...prev[existingIdx],
+          text: update.text,
+          is_partial: update.is_partial,
+          confidence: update.confidence,
+          speaker: update.speaker ?? prev[existingIdx].speaker,
+          channel: update.channel ?? prev[existingIdx].channel,
+          audio_end_time: update.audio_end_time ?? prev[existingIdx].audio_end_time,
+          duration: update.duration ?? prev[existingIdx].duration,
+        };
+        return next;
+      }
+
+      // Check if this transcript already exists (legacy text+timestamp dedupe)
       const exists = prev.some(
         t => t.text === update.text && t.timestamp === update.timestamp
       );
@@ -464,8 +564,21 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
     };
 
+    const showSpeaker =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('showSpeakerLabels') !== 'false'
+        : true;
+
     const fullTranscript = transcripts
-      .map(t => `${formatTime(t.audio_start_time)} ${t.text}`)
+      .filter(t => !t.is_partial)
+      .map(t =>
+        formatTranscriptExportLine({
+          speaker: t.speaker,
+          timeLabel: formatTime(t.audio_start_time),
+          text: t.text,
+          showSpeaker,
+        })
+      )
       .join('\n');
     navigator.clipboard.writeText(fullTranscript);
 

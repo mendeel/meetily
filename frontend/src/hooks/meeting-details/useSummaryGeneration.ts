@@ -12,6 +12,7 @@ import {
   readMeetingSummaryLanguage,
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
+import { formatTranscriptExportLine } from '@/lib/speakerLabels';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -444,9 +445,21 @@ export function useSummaryGeneration({
       return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
     };
 
+    const showSpeaker =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('showSpeakerLabels') !== 'false'
+        : true;
+
     return {
       transcriptText: allTranscripts
-        .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${t.text}`)
+        .map(t =>
+          formatTranscriptExportLine({
+            speaker: t.speaker,
+            timeLabel: formatTime(t.audio_start_time, t.timestamp),
+            text: t.text,
+            showSpeaker,
+          })
+        )
         .join('\n'),
       transcriptTexts: allTranscripts.map(t => t.text),
     };

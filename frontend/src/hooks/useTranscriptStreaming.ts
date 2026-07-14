@@ -111,6 +111,10 @@ export function useTranscriptStreaming(
    */
   const getDisplayText = (segment: TranscriptSegmentData): string => {
     if (streamingSegment && segment.id === streamingSegment.id) {
+      // Prefer latest segment text when ASR replaced/finalized the line
+      if (segment.text !== streamingSegment.fullText) {
+        return segment.text;
+      }
       return streamingSegment.visibleText;
     }
     return segment.text;

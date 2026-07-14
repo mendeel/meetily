@@ -32,7 +32,7 @@ export function TranscriptPanel({
 }: TranscriptPanelProps) {
   // Contexts
   const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
-  const { transcriptModelConfig } = useConfig();
+  const { transcriptModelConfig, showSpeakerLabels, showConfidenceIndicator } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
   const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } = usePermissionCheck();
   const isLinux = useIsLinux();
@@ -45,6 +45,10 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speaker: t.speaker,
+      channel: t.channel,
+      is_partial: t.is_partial,
+      sequence_id: t.sequence_id,
     })),
     [transcripts]
   );
@@ -112,7 +116,8 @@ export function TranscriptPanel({
               isProcessing={isProcessingStop}
               isStopping={isStopping}
               enableStreaming={isRecording}
-              showConfidence={true}
+              showConfidence={showConfidenceIndicator}
+              showSpeakerLabels={showSpeakerLabels}
             />
           </div>
         </div>

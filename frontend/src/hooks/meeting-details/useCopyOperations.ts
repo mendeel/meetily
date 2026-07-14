@@ -4,6 +4,7 @@ import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummary
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
+import { formatTranscriptExportLine } from '@/lib/speakerLabels';
 
 interface UseCopyOperationsProps {
   meeting: any;
@@ -85,8 +86,19 @@ export function useCopyOperations({
 
     const header = `# Transcript of the Meeting: ${meeting.id} - ${meetingTitle ?? meeting.title}\n\n`;
     const date = `## Date: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
+    const showSpeaker =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('showSpeakerLabels') !== 'false'
+        : true;
     const fullTranscript = allTranscripts
-      .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${t.text}  `)
+      .map(t =>
+        formatTranscriptExportLine({
+          speaker: t.speaker,
+          timeLabel: formatTime(t.audio_start_time, t.timestamp),
+          text: t.text,
+          showSpeaker,
+        }) + '  '
+      )
       .join('\n');
 
     await navigator.clipboard.writeText(header + date + fullTranscript);

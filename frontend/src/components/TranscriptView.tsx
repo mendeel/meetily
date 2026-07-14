@@ -6,6 +6,7 @@ import { ConfidenceIndicator } from './ConfidenceIndicator';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { RecordingStatusBar } from './RecordingStatusBar';
 import { motion, AnimatePresence } from 'framer-motion';
+import { formatSpeakerLabel, isLocalSpeaker } from '@/lib/speakerLabels';
 
 interface TranscriptViewProps {
   transcripts: Transcript[];
@@ -14,6 +15,7 @@ interface TranscriptViewProps {
   isProcessing?: boolean; // Is processing/finalizing transcription (hides "Listening..." indicator)
   isStopping?: boolean; // Is recording being stopped (provides immediate UI feedback)
   enableStreaming?: boolean; // Enable streaming effect for live transcription UX
+  showSpeakerLabels?: boolean;
 }
 
 interface SpeechDetectedEvent {
@@ -104,7 +106,7 @@ function cleanStopWords(text: string): string {
   return cleanedText;
 }
 
-export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isRecording = false, isPaused = false, isProcessing = false, isStopping = false, enableStreaming = false }) => {
+export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isRecording = false, isPaused = false, isProcessing = false, isStopping = false, enableStreaming = false, showSpeakerLabels = true }) => {
   const [speechDetected, setSpeechDetected] = useState(false);
 
   // Debug: Log the props to understand what's happening
@@ -144,6 +146,23 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
 
     window.addEventListener('confidenceIndicatorChanged', handleConfidenceChange);
     return () => window.removeEventListener('confidenceIndicatorChanged', handleConfidenceChange);
+  }, []);
+
+  const [speakerLabelsEnabled, setSpeakerLabelsEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('showSpeakerLabels');
+      return saved !== null ? saved === 'true' : showSpeakerLabels;
+    }
+    return showSpeakerLabels;
+  });
+
+  useEffect(() => {
+    const handleSpeakerLabelsChange = (e: Event) => {
+      const customEvent = e as CustomEvent<boolean>;
+      setSpeakerLabelsEnabled(customEvent.detail);
+    };
+    window.addEventListener('speakerLabelsChanged', handleSpeakerLabelsChange);
+    return () => window.removeEventListener('speakerLabelsChanged', handleSpeakerLabelsChange);
   }, []);
 
   // Listen for speech-detected event
@@ -268,6 +287,10 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
         // Show [Silence] ONLY if the ORIGINAL transcript was empty (not just after filtering)
         const originalWasEmpty = transcript.text.trim() === '';
         const displayText = originalWasEmpty && !isStreaming ? '[Silence]' : filteredText;
+        const isPartial = !!transcript.is_partial;
+        const showAsLive = isStreaming || isPartial;
+        const speakerLabel = speakerLabelsEnabled ? formatSpeakerLabel(transcript.speaker) : null;
+        const isYou = isLocalSpeaker(transcript.speaker);
 
         // Sizer text: use cleaned version for proper sizing, fallback to [Silence] only if original was empty
         const sizerText = cleanStopWords(isStreaming ? streamingTranscript.fullText : transcript.text)
@@ -282,38 +305,54 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
             className="mb-3"
           >
             <div className="flex items-start gap-2">
-              <Tooltip>
-                <TooltipTrigger>
-                  <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
-                    {transcript.audio_start_time !== undefined
-                      ? formatRecordingTime(transcript.audio_start_time)
-                      : transcript.timestamp}
+              <div className="flex-shrink-0 min-w-[50px] mt-1 flex flex-col items-start gap-0.5">
+                {speakerLabel && (
+                  <span
+                    className={`text-xs font-semibold leading-tight ${
+                      isYou ? 'text-blue-600' : 'text-teal-700'
+                    }`}
+                  >
+                    {speakerLabel}
                   </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {transcript.duration !== undefined && (
-                    <span className="text-xs text-gray-400">
-                      {transcript.duration.toFixed(1)}s
-                      {transcript.confidence !== undefined && (
-                        <ConfidenceIndicator
-                          confidence={transcript.confidence}
-                          showIndicator={showConfidence}
-                        />
-                      )}
+                )}
+                <Tooltip>
+                  <TooltipTrigger>
+                    <span className="text-xs text-gray-400 leading-tight">
+                      {transcript.audio_start_time !== undefined
+                        ? formatRecordingTime(transcript.audio_start_time)
+                        : transcript.timestamp}
                     </span>
-                  )}
-                </TooltipContent>
-              </Tooltip>
-              <div className="flex-1">
-                {isStreaming ? (
-                  // Streaming transcript - show in bubble (full width)
-                  <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {transcript.duration !== undefined && (
+                      <span className="text-xs text-gray-400">
+                        {transcript.duration.toFixed(1)}s
+                        {transcript.confidence !== undefined && (
+                          <ConfidenceIndicator
+                            confidence={transcript.confidence}
+                            showIndicator={showConfidence}
+                          />
+                        )}
+                      </span>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="flex-1 min-w-0">
+                {showAsLive ? (
+                  // Streaming / partial transcript - show in bubble
+                  <div className={`border rounded-lg px-3 py-2 ${
+                    isPartial ? 'bg-blue-50 border-blue-100' : 'bg-gray-100 border-gray-200'
+                  }`}>
                     <div className="relative">
-                      <p className="text-base text-gray-800 leading-relaxed" style={{ visibility: 'hidden' }}>
+                      <p className={`text-base leading-relaxed ${isPartial ? 'text-gray-600 italic' : 'text-gray-800'}`} style={{ visibility: 'hidden' }}>
                         {sizerText}
                       </p>
-                      <p className="text-base text-gray-800 leading-relaxed absolute top-0 left-0">
+                      <p className={`text-base leading-relaxed absolute top-0 left-0 ${isPartial ? 'text-gray-600 italic' : 'text-gray-800'}`}>
                         {displayText}
+                        {isPartial && (
+                          <span className="inline-block w-1.5 h-3 ml-0.5 bg-blue-400 animate-pulse align-middle rounded-sm" />
+                        )}
                       </p>
                     </div>
                   </div>

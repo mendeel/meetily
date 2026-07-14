@@ -1,10 +1,10 @@
 "use client";
 
 import { Transcript, TranscriptSegmentData } from '@/types';
-import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { useMemo } from 'react';
+import { useConfig } from '@/contexts/ConfigContext';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -49,6 +49,8 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
+  const { showSpeakerLabels, showConfidenceIndicator } = useConfig();
+
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -61,6 +63,10 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speaker: t.speaker,
+      channel: t.channel,
+      is_partial: t.is_partial,
+      sequence_id: t.sequence_id,
     }));
   }, [transcripts, usePagination, segments]);
 
@@ -87,7 +93,8 @@ export function TranscriptPanel({
           isProcessing={false}
           isStopping={false}
           enableStreaming={false}
-          showConfidence={true}
+          showConfidence={showConfidenceIndicator}
+          showSpeakerLabels={showSpeakerLabels}
           disableAutoScroll={disableAutoScroll}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}

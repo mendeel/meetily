@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useReducer, startTransition, useEffect, useState, memo } from "react";
+import { useRef, useReducer, startTransition, useEffect, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
+import { formatSpeakerLabel, isLocalSpeaker } from "@/lib/speakerLabels";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -25,6 +26,8 @@ export interface VirtualizedTranscriptViewProps {
     enableStreaming?: boolean;
     /** Show confidence indicators */
     showConfidence?: boolean;
+    /** Show speaker labels (You / Speaker N) */
+    showSpeakerLabels?: boolean;
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
 
@@ -69,37 +72,68 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp,
     text,
     confidence,
+    speaker,
+    isPartial,
     isStreaming,
     showConfidence,
+    showSpeakerLabels,
 }: {
     id: string;
     timestamp: number;
     text: string;
     confidence?: number;
+    speaker?: string;
+    isPartial?: boolean;
     isStreaming: boolean;
     showConfidence: boolean;
+    showSpeakerLabels: boolean;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    const speakerLabel = showSpeakerLabels ? formatSpeakerLabel(speaker) : null;
+    const isYou = isLocalSpeaker(speaker);
+    const showAsLive = isStreaming || !!isPartial;
 
     return (
         <div id={`segment-${id}`} className="mb-3">
             <div className="flex items-start gap-2">
-                <Tooltip>
-                    <TooltipTrigger>
-                        <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
-                            {formatRecordingTime(timestamp)}
+                <div className="flex-shrink-0 min-w-[50px] mt-1 flex flex-col items-start gap-0.5">
+                    {speakerLabel && (
+                        <span
+                            className={`text-xs font-semibold leading-tight ${
+                                isYou ? 'text-blue-600' : 'text-teal-700'
+                            }`}
+                        >
+                            {speakerLabel}
                         </span>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                        {confidence !== undefined && showConfidence && (
-                            <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
-                        )}
-                    </TooltipContent>
-                </Tooltip>
-                <div className="flex-1">
-                    {isStreaming ? (
-                        <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
-                            <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                    )}
+                    <Tooltip>
+                        <TooltipTrigger>
+                            <span className="text-xs text-gray-400 leading-tight">
+                                {formatRecordingTime(timestamp)}
+                            </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            {confidence !== undefined && showConfidence && (
+                                <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
+                            )}
+                        </TooltipContent>
+                    </Tooltip>
+                </div>
+                <div className="flex-1 min-w-0">
+                    {showAsLive ? (
+                        <div className={`border rounded-lg px-3 py-2 ${
+                            isPartial
+                                ? 'bg-blue-50 border-blue-100'
+                                : 'bg-gray-100 border-gray-200'
+                        }`}>
+                            <p className={`text-base leading-relaxed ${
+                                isPartial ? 'text-gray-600 italic' : 'text-gray-800'
+                            }`}>
+                                {displayText}
+                                {isPartial && (
+                                    <span className="inline-block w-1.5 h-3 ml-0.5 bg-blue-400 animate-pulse align-middle rounded-sm" />
+                                )}
+                            </p>
                         </div>
                     ) : (
                         <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
@@ -118,6 +152,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     isStopping = false,
     enableStreaming = false,
     showConfidence = true,
+    showSpeakerLabels = true,
     disableAutoScroll = false,
     hasMore = false,
     isLoadingMore = false,
@@ -137,7 +172,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     const virtualizer = useVirtualizer({
         count: segments.length,
         getScrollElement: () => scrollRef.current,
-        estimateSize: () => 60, // Estimated height per segment
+        estimateSize: () => 72, // Slightly taller to account for speaker + timestamp
         overscan: 10, // Render extra items above/below viewport
         onChange: () => {
             startTransition(() => {
@@ -223,6 +258,26 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Use simple rendering for small lists, virtualization for large lists
     const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
 
+    const renderSegment = (segment: TranscriptSegmentData) => {
+        const isStreaming = streamingSegmentId === segment.id;
+        // Skip typewriter on partials — they already stream via ASR replacements
+        const text = segment.is_partial ? segment.text : getDisplayText(segment);
+
+        return (
+            <TranscriptSegment
+                id={segment.id}
+                timestamp={segment.timestamp}
+                text={text}
+                confidence={segment.confidence}
+                speaker={segment.speaker}
+                isPartial={segment.is_partial}
+                isStreaming={isStreaming && !segment.is_partial}
+                showConfidence={showConfidence}
+                showSpeakerLabels={showSpeakerLabels}
+            />
+        );
+    };
+
     return (
         <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
             {/* Recording Status Bar - Sticky at top, always visible when recording */}
@@ -274,7 +329,6 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     >
                         {virtualizer.getVirtualItems().map((virtualRow) => {
                             const segment = segments[virtualRow.index];
-                            const isStreaming = streamingSegmentId === segment.id;
 
                             return (
                                 <div
@@ -289,14 +343,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         transform: `translateY(${virtualRow.start}px)`,
                                     }}
                                 >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={getDisplayText(segment)}
-                                        confidence={segment.confidence}
-                                        isStreaming={isStreaming}
-                                        showConfidence={showConfidence}
-                                    />
+                                    {renderSegment(segment)}
                                 </div>
                             );
                         })}
@@ -335,27 +382,16 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 // Simple rendering for small lists (better animations)
                 <>
                     <div className="space-y-1">
-                        {segments.map((segment) => {
-                            const isStreaming = streamingSegmentId === segment.id;
-
-                            return (
-                                <motion.div
-                                    key={segment.id}
-                                    initial={{ opacity: 0, y: 5 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ duration: 0.15 }}
-                                >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={getDisplayText(segment)}
-                                        confidence={segment.confidence}
-                                        isStreaming={isStreaming}
-                                        showConfidence={showConfidence}
-                                    />
-                                </motion.div>
-                            );
-                        })}
+                        {segments.map((segment) => (
+                            <motion.div
+                                key={segment.id}
+                                initial={{ opacity: 0, y: 5 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.15 }}
+                            >
+                                {renderSegment(segment)}
+                            </motion.div>
+                        ))}
                     </div>
 
                     {/* Infinite scroll trigger (for small lists that grow) */}
