@@ -104,21 +104,33 @@ pub fn decide_capture_start(phase: DictationPhase, has_capture: bool) -> Capture
 pub enum StopDecision {
     /// Enter Transcribing (if needed) and run finalize now.
     FinalizeNow,
-    /// Start is still in flight (or not yet Listening); finalize after start.
+    /// Start is still in flight (Idle but starting); finalize after start reaches Listening.
     PendingStop,
     /// Already finalizing or nothing actionable.
     Noop,
 }
 
-pub fn decide_stop(phase: DictationPhase, finalizing: bool) -> StopDecision {
+/// Decide stop behavior.
+///
+/// `starting` is true only while a start attempt is in flight. Idle release with no
+/// start in-flight is a no-op — avoids a stale `pending_stop` after a failed start.
+pub fn decide_stop(phase: DictationPhase, finalizing: bool, starting: bool) -> StopDecision {
     if finalizing {
         return StopDecision::Noop;
     }
     match phase {
         DictationPhase::Listening | DictationPhase::Transcribing => StopDecision::FinalizeNow,
-        DictationPhase::Idle => StopDecision::PendingStop,
+        DictationPhase::Idle if starting => StopDecision::PendingStop,
         _ => StopDecision::Noop,
     }
+}
+
+/// Whether a scheduled pill auto-hide should still run.
+///
+/// `scheduled_generation` is captured when the hide was scheduled; if a newer session
+/// (or terminal status) bumped `current_generation`, the hide is skipped.
+pub fn should_hide_pill(scheduled_generation: u64, current_generation: u64) -> bool {
+    scheduled_generation == current_generation
 }
 
 /// Whether a finalize entry may proceed, no-op, or only clean up idle state.
@@ -199,23 +211,43 @@ mod tests {
     }
 
     #[test]
-    fn ptt_release_while_idle_defers_as_pending_stop() {
+    fn ptt_release_while_idle_is_noop_without_start_in_flight() {
         assert_eq!(
-            decide_stop(DictationPhase::Idle, false),
-            StopDecision::PendingStop
+            decide_stop(DictationPhase::Idle, false, false),
+            StopDecision::Noop
         );
         assert_eq!(
-            decide_stop(DictationPhase::Listening, false),
+            decide_stop(DictationPhase::Listening, false, false),
             StopDecision::FinalizeNow
         );
         assert_eq!(
-            decide_stop(DictationPhase::Idle, true),
+            decide_stop(DictationPhase::Idle, true, true),
             StopDecision::Noop
         );
         assert_eq!(
-            decide_stop(DictationPhase::Polishing, false),
+            decide_stop(DictationPhase::Polishing, false, false),
             StopDecision::Noop
         );
+    }
+
+    #[test]
+    fn ptt_release_while_idle_defers_only_when_starting() {
+        assert_eq!(
+            decide_stop(DictationPhase::Idle, false, true),
+            StopDecision::PendingStop
+        );
+        // After a failed start, starting is cleared — release must not leave a stale pending_stop.
+        assert_eq!(
+            decide_stop(DictationPhase::Idle, false, false),
+            StopDecision::Noop
+        );
+    }
+
+    #[test]
+    fn stale_pill_hide_skipped_when_generation_advances() {
+        assert!(should_hide_pill(3, 3));
+        assert!(!should_hide_pill(3, 4));
+        assert!(!should_hide_pill(1, 2));
     }
 
     #[test]

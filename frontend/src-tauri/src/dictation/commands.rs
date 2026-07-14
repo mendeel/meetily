@@ -19,8 +19,8 @@ use super::pill::{hide_pill, show_pill};
 use super::polish::{rule_based_cleanup, system_prompt_for};
 use super::profiles::PolishProfile;
 use super::session::{
-    decide_capture_start, decide_finalize, decide_stop, CaptureStartDecision, DictationPhase,
-    DictationSession, FinalizeDecision, StopDecision, TriggerMode,
+    decide_capture_start, decide_finalize, decide_stop, should_hide_pill, CaptureStartDecision,
+    DictationPhase, DictationSession, FinalizeDecision, StopDecision, TriggerMode,
 };
 use crate::database::repositories::setting::SettingsRepository;
 use crate::state::AppState;
@@ -36,6 +36,11 @@ pub struct DictationRuntime {
     pub pending_stop: bool,
     /// True while a finalize task owns the session (capture taken / STT in flight).
     pub finalizing: bool,
+    /// True while `dictation_start_inner` is in flight (before Listening or failure).
+    pub starting: bool,
+    /// Bumped whenever the pill is shown for a new Listening/terminal session.
+    /// Auto-hide timers capture this and only hide if it still matches.
+    pub pill_generation: u64,
 }
 
 pub static DICTATION: Lazy<Mutex<DictationRuntime>> = Lazy::new(|| {
@@ -47,6 +52,8 @@ pub static DICTATION: Lazy<Mutex<DictationRuntime>> = Lazy::new(|| {
         target_bundle_id: None,
         pending_stop: false,
         finalizing: false,
+        starting: false,
+        pill_generation: 0,
     })
 });
 
@@ -106,30 +113,47 @@ pub(crate) fn emit_phase<R: Runtime>(
     );
 }
 
-fn schedule_hide_pill<R: Runtime>(app: &AppHandle<R>) {
+fn schedule_hide_pill<R: Runtime>(app: &AppHandle<R>, generation: u64) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(PILL_STATUS_VISIBLE_MS)).await;
-        let _ = hide_pill(&app);
+        let current = lock_runtime().pill_generation;
+        if should_hide_pill(generation, current) {
+            let _ = hide_pill(&app);
+        }
     });
 }
 
+/// Show the pill and bump generation so any prior auto-hide timer becomes a no-op.
+fn show_pill_for_session<R: Runtime>(app: &AppHandle<R>) -> u64 {
+    let generation = {
+        let mut rt = lock_runtime();
+        rt.pill_generation = rt.pill_generation.wrapping_add(1);
+        rt.pill_generation
+    };
+    let _ = show_pill(app);
+    generation
+}
+
 /// Emit a terminal phase while the pill is still visible, then hide after a short delay.
+/// `generation` must be the pill token from this session (captured before any reset that
+/// could let a newer session start), so a stale timer cannot hide a newer pill.
 fn emit_terminal_phase_and_hide<R: Runtime>(
     app: &AppHandle<R>,
     phase: DictationPhase,
     app_name: Option<&str>,
     message: Option<&str>,
+    generation: u64,
 ) {
     emit_phase(app, phase, app_name, message);
-    schedule_hide_pill(app);
+    schedule_hide_pill(app, generation);
 }
 
 /// Surface a dictation error to the UI (pill + phase event). Used by hotkeys when
 /// start/stop cannot proceed. Auto-hides after a short delay.
 pub(crate) fn emit_dictation_error<R: Runtime>(app: &AppHandle<R>, message: &str) {
-    let _ = show_pill(app);
-    emit_terminal_phase_and_hide(app, DictationPhase::Error, None, Some(message));
+    let generation = show_pill_for_session(app);
+    emit_terminal_phase_and_hide(app, DictationPhase::Error, None, Some(message), generation);
 }
 
 fn is_silent(samples: &[f32]) -> bool {
@@ -267,6 +291,7 @@ fn reset_runtime(rt: &mut DictationRuntime) {
     rt.target_bundle_id = None;
     rt.pending_stop = false;
     rt.finalizing = false;
+    rt.starting = false;
     rt.session.reset();
 }
 
@@ -276,8 +301,15 @@ fn fail_and_reset(rt: &mut DictationRuntime) {
     rt.target_bundle_id = None;
     rt.pending_stop = false;
     rt.finalizing = false;
+    rt.starting = false;
     rt.session.fail();
     rt.session.reset();
+}
+
+/// Clear in-flight start flags after any early failure (before Listening).
+fn clear_start_attempt(rt: &mut DictationRuntime) {
+    rt.starting = false;
+    rt.pending_stop = false;
 }
 
 #[tauri::command]
@@ -303,7 +335,13 @@ pub async fn dictation_set_config<R: Runtime>(
 
 /// Start listening (or toggle-finalize). Does not require AppState — mic + pill only.
 pub async fn dictation_start_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    {
+        let mut rt = lock_runtime();
+        rt.starting = true;
+    }
+
     if crate::audio::recording_commands::is_recording().await {
+        clear_start_attempt(&mut lock_runtime());
         return Err("Stop meeting recording first".into());
     }
 
@@ -314,15 +352,18 @@ pub async fn dictation_start_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
     let finalize_now = {
         let mut rt = lock_runtime();
         if !rt.config.enabled {
+            clear_start_attempt(&mut rt);
             return Err("Dictation is disabled".into());
         }
         rt.session.meeting_recording_active = false;
-        rt.session
-            .on_hotkey_pressed()
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = rt.session.on_hotkey_pressed() {
+            clear_start_attempt(&mut rt);
+            return Err(e.to_string());
+        }
 
         if rt.session.phase == DictationPhase::Transcribing {
             // Toggle second-press: finalize without starting a new capture.
+            rt.starting = false;
             true
         } else if rt.session.phase == DictationPhase::Listening {
             match decide_capture_start(rt.session.phase, rt.capture.is_some()) {
@@ -342,28 +383,36 @@ pub async fn dictation_start_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(),
                         }
                     }
                 }
-                CaptureStartDecision::NotListening => return Ok(()),
+                CaptureStartDecision::NotListening => {
+                    clear_start_attempt(&mut rt);
+                    return Ok(());
+                }
             }
 
             // Fast PTT release raced ahead of start — finalize immediately.
             if rt.pending_stop {
                 rt.pending_stop = false;
+                rt.starting = false;
                 rt.session.phase = DictationPhase::Transcribing;
                 true
             } else {
+                rt.starting = false;
                 false
             }
         } else {
+            clear_start_attempt(&mut rt);
             return Ok(());
         }
     };
 
     if finalize_now {
+        // Pending-stop path never reached the Listening show_pill — surface HUD first.
+        show_pill_for_session(app);
         let state = app.try_state::<AppState>();
         return finalize_dictation(app, state.as_deref()).await;
     }
 
-    let _ = show_pill(app);
+    show_pill_for_session(app);
     emit_phase(
         app,
         DictationPhase::Listening,
@@ -378,7 +427,7 @@ pub async fn dictation_stop_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), 
     let should_finalize = {
         let mut rt = lock_runtime();
         let _ = rt.session.on_hotkey_released();
-        match decide_stop(rt.session.phase, rt.finalizing) {
+        match decide_stop(rt.session.phase, rt.finalizing, rt.starting) {
             StopDecision::Noop => false,
             StopDecision::PendingStop => {
                 rt.pending_stop = true;
@@ -414,7 +463,8 @@ async fn finalize_dictation<R: Runtime>(
     state: Option<&AppState>,
 ) -> Result<(), String> {
     // Stop mic capture synchronously before any `.await` — `MicCapture` / cpal::Stream is !Send.
-    let (samples, config, target_app, target_bundle) = {
+    // Capture pill_generation before reset so a later session cannot be hidden by this finalize's timer.
+    let (samples, config, target_app, target_bundle, pill_generation) = {
         let mut rt = lock_runtime();
         match decide_finalize(rt.session.phase, rt.finalizing) {
             FinalizeDecision::Noop => return Ok(()),
@@ -427,6 +477,7 @@ async fn finalize_dictation<R: Runtime>(
                 rt.finalizing = true;
             }
         }
+        let pill_generation = rt.pill_generation;
         let config = rt.config.clone();
         let target_app = rt.target_app_name.clone();
         let target_bundle = rt.target_bundle_id.clone();
@@ -439,11 +490,12 @@ async fn finalize_dictation<R: Runtime>(
                     DictationPhase::Done,
                     target_app.as_deref(),
                     None,
+                    pill_generation,
                 );
                 return Ok(());
             }
         };
-        (samples, config, target_app, target_bundle)
+        (samples, config, target_app, target_bundle, pill_generation)
     };
 
     emit_phase(
@@ -456,7 +508,13 @@ async fn finalize_dictation<R: Runtime>(
     if is_silent(&samples) {
         let mut rt = lock_runtime();
         reset_runtime(&mut rt);
-        emit_terminal_phase_and_hide(app, DictationPhase::Done, target_app.as_deref(), None);
+        emit_terminal_phase_and_hide(
+            app,
+            DictationPhase::Done,
+            target_app.as_deref(),
+            None,
+            pill_generation,
+        );
         return Ok(());
     }
 
@@ -470,6 +528,7 @@ async fn finalize_dictation<R: Runtime>(
                 DictationPhase::Error,
                 target_app.as_deref(),
                 Some(&e),
+                pill_generation,
             );
             return Err(e);
         }
@@ -479,7 +538,13 @@ async fn finalize_dictation<R: Runtime>(
     if cleaned.is_empty() {
         let mut rt = lock_runtime();
         reset_runtime(&mut rt);
-        emit_terminal_phase_and_hide(app, DictationPhase::Done, target_app.as_deref(), None);
+        emit_terminal_phase_and_hide(
+            app,
+            DictationPhase::Done,
+            target_app.as_deref(),
+            None,
+            pill_generation,
+        );
         return Ok(());
     }
 
@@ -533,6 +598,7 @@ async fn finalize_dictation<R: Runtime>(
                 DictationPhase::Error,
                 target_app.as_deref(),
                 Some(&e),
+                pill_generation,
             );
             return Err(e);
         }
@@ -552,7 +618,13 @@ async fn finalize_dictation<R: Runtime>(
         reset_runtime(&mut rt);
     }
 
-    emit_terminal_phase_and_hide(app, DictationPhase::Done, target_app.as_deref(), None);
+    emit_terminal_phase_and_hide(
+        app,
+        DictationPhase::Done,
+        target_app.as_deref(),
+        None,
+        pill_generation,
+    );
     Ok(())
 }
 
