@@ -22,6 +22,20 @@ pub struct TranscriptSegment {
     pub display_time: String,   // Formatted time for display like "[02:15]"
     pub confidence: f32,
     pub sequence_id: u64,
+    /// Speaker label: "you" | "others" | "speaker_1" | …
+    #[serde(default = "default_speaker")]
+    pub speaker: String,
+    /// Audio channel: "mic" | "system"
+    #[serde(default = "default_channel")]
+    pub channel: String,
+}
+
+fn default_speaker() -> String {
+    "others".to_string()
+}
+
+fn default_channel() -> String {
+    "mic".to_string()
 }
 
 /// Meeting metadata structure
@@ -129,6 +143,8 @@ impl RecordingSaver {
             display_time: "[00:00]".to_string(),
             confidence: 1.0,
             sequence_id: 0,
+            speaker: "others".to_string(),
+            channel: "mic".to_string(),
         };
         self.add_transcript_segment(segment);
     }
