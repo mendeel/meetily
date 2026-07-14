@@ -30,8 +30,10 @@
                 "decorations": false,
                 "transparent": true,
                 "alwaysOnTop": true,
+                "visibleOnAllWorkspaces": true,
                 "visible": false,
                 "focus": false,
+                "focusable": false,
                 "skipTaskbar": true
             }
         ],
