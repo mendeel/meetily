@@ -529,6 +529,13 @@ pub fn run() {
                 log::warn!("Failed to resolve resource directory for templates");
             }
 
+            #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+            {
+                if let Err(e) = dictation::hotkeys::setup(_app.handle()) {
+                    log::error!("Failed to setup dictation hotkeys: {e}");
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

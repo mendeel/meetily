@@ -1,7 +1,12 @@
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Runtime};
+use tauri_plugin_store::StoreExt;
 
 use super::profiles::PolishProfile;
 use super::session::TriggerMode;
+
+const STORE_FILE: &str = "dictation_config.json";
+const STORE_KEY: &str = "config";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DictationConfig {
@@ -45,6 +50,41 @@ impl DictationConfig {
         }
         super::profiles::profile_for_app(app_name, bundle_id)
     }
+}
+
+/// Load dictation config from the Tauri store (falls back to defaults).
+pub fn load_persisted<R: Runtime>(app: &AppHandle<R>) -> DictationConfig {
+    let store = match app.store(STORE_FILE) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("dictation config store unavailable: {e}");
+            return DictationConfig::default();
+        }
+    };
+    match store.get(STORE_KEY) {
+        Some(value) => match serde_json::from_value::<DictationConfig>(value) {
+            Ok(config) => config,
+            Err(e) => {
+                log::warn!("Failed to deserialize dictation config: {e}");
+                DictationConfig::default()
+            }
+        },
+        None => DictationConfig::default(),
+    }
+}
+
+/// Persist dictation config to the Tauri store.
+pub fn save_persisted<R: Runtime>(app: &AppHandle<R>, config: &DictationConfig) -> Result<(), String> {
+    let store = app
+        .store(STORE_FILE)
+        .map_err(|e| format!("Failed to open dictation config store: {e}"))?;
+    let value = serde_json::to_value(config)
+        .map_err(|e| format!("Failed to serialize dictation config: {e}"))?;
+    store.set(STORE_KEY, value);
+    store
+        .save()
+        .map_err(|e| format!("Failed to save dictation config: {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -48,7 +48,7 @@ struct DictationResultPayload {
     delivery: String,
 }
 
-fn lock_runtime() -> std::sync::MutexGuard<'static, DictationRuntime> {
+pub(crate) fn lock_runtime() -> std::sync::MutexGuard<'static, DictationRuntime> {
     DICTATION
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -234,10 +234,18 @@ pub async fn dictation_get_config() -> Result<DictationConfig, String> {
 }
 
 #[tauri::command]
-pub async fn dictation_set_config(config: DictationConfig) -> Result<(), String> {
-    let mut rt = lock_runtime();
-    rt.session.mode = config.trigger_mode;
-    rt.config = config;
+pub async fn dictation_set_config<R: Runtime>(
+    app: AppHandle<R>,
+    config: DictationConfig,
+) -> Result<(), String> {
+    {
+        let mut rt = lock_runtime();
+        rt.session.mode = config.trigger_mode;
+        rt.config = config.clone();
+    }
+    super::config::save_persisted(&app, &config)?;
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    super::hotkeys::reregister(&app)?;
     Ok(())
 }
 
