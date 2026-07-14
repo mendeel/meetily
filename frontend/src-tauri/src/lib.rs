@@ -482,6 +482,14 @@ pub fn run() {
                 }
             });
 
+            // Diarization models directory (system-audio speaker labels)
+            audio::diarization::set_diarization_models_directory(&_app.handle());
+            tauri::async_runtime::spawn(async {
+                if let Err(e) = audio::diarization::commands::diarization_init().await {
+                    log::error!("Failed to initialize diarization manager on startup: {}", e);
+                }
+            });
+
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -608,6 +616,14 @@ pub fn run() {
             nemotron_engine::commands::nemotron_cancel_download,
             nemotron_engine::commands::nemotron_delete_corrupted_model,
             nemotron_engine::commands::open_nemotron_models_folder,
+            // Diarization commands (system-audio speaker labels)
+            audio::diarization::commands::diarization_init,
+            audio::diarization::commands::diarization_status,
+            audio::diarization::commands::diarization_is_available,
+            audio::diarization::commands::is_diarization_model_available,
+            audio::diarization::commands::set_neural_diarization_enabled,
+            audio::diarization::commands::diarization_download_models,
+            audio::diarization::commands::diarization_get_models_directory,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,
