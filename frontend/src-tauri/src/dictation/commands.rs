@@ -54,6 +54,12 @@ fn lock_runtime() -> std::sync::MutexGuard<'static, DictationRuntime> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// True while dictation mic capture is active (Listening phase).
+/// Used by meeting recording to soft-block concurrent capture.
+pub fn dictation_is_listening() -> bool {
+    lock_runtime().session.phase == DictationPhase::Listening
+}
+
 fn phase_name(phase: DictationPhase) -> &'static str {
     match phase {
         DictationPhase::Idle => "idle",
