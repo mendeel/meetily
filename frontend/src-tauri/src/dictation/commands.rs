@@ -8,6 +8,12 @@ use tokio_util::sync::CancellationToken;
 use super::capture::MicCapture;
 use super::config::DictationConfig;
 use super::context::frontmost_app;
+#[cfg(target_os = "macos")]
+use super::context::{
+    activate_app_by_bundle_id, may_paste_after_activation, MEETILY_BUNDLE_ID,
+};
+#[cfg(target_os = "macos")]
+use super::injector::accessibility_trusted;
 use super::injector::{inject_or_clipboard, InjectResult};
 use super::pill::{hide_pill, show_pill};
 use super::polish::{rule_based_cleanup, system_prompt_for};
@@ -513,7 +519,10 @@ async fn finalize_dictation<R: Runtime>(
 
     emit_phase(app, DictationPhase::Inserting, target_app.as_deref(), None);
 
-    let delivery = match inject_or_clipboard(&final_text) {
+    // Restore the originally frontmost target before Cmd+V. On failure / AX
+    // unavailable / Meetily still focused, fall back to clipboard only.
+    let allow_paste = prepare_target_paste(target_bundle.as_deref());
+    let delivery = match inject_or_clipboard(&final_text, allow_paste) {
         Ok(InjectResult::Inserted) => "inserted",
         Ok(InjectResult::CopiedToClipboard) => "clipboard",
         Err(e) => {
@@ -545,6 +554,34 @@ async fn finalize_dictation<R: Runtime>(
 
     emit_terminal_phase_and_hide(app, DictationPhase::Done, target_app.as_deref(), None);
     Ok(())
+}
+
+/// Reactivate the stored target app (macOS), wait briefly, then decide if Cmd+V is safe.
+/// Non-macOS / AX unavailable / activation failure → false (clipboard-only).
+fn prepare_target_paste(target_bundle: Option<&str>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if !accessibility_trusted() {
+            return false;
+        }
+        let Some(bid) = target_bundle.filter(|s| !s.is_empty()) else {
+            return false;
+        };
+        let activation_ok = activate_app_by_bundle_id(bid).is_ok();
+        if activation_ok {
+            // Brief settle so the target receives focus before synthesized Cmd+V.
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let front = frontmost_app()
+            .ok()
+            .and_then(|f| f.bundle_id);
+        may_paste_after_activation(bid, activation_ok, front.as_deref(), MEETILY_BUNDLE_ID)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = target_bundle;
+        false
+    }
 }
 
 #[tauri::command]

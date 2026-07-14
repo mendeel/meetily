@@ -24,19 +24,25 @@ pub fn accessibility_trusted() -> bool {
     false
 }
 
-/// Copy text then synthesize Cmd+V when Accessibility trusted.
-pub fn inject_or_clipboard(text: &str) -> Result<InjectResult, String> {
+/// Copy text, then synthesize Cmd+V only when Accessibility is trusted **and**
+/// the caller confirmed the target app is focused (`allow_paste`).
+///
+/// When `allow_paste` is false (activation failed, Meetily still frontmost,
+/// missing target, or AX unavailable), text stays on the clipboard only —
+/// never paste into whatever happens to be focused.
+pub fn inject_or_clipboard(text: &str, allow_paste: bool) -> Result<InjectResult, String> {
     if text.trim().is_empty() {
         return Err("empty text".into());
     }
     copy_to_clipboard(text)?;
     #[cfg(target_os = "macos")]
     {
-        if accessibility_trusted() {
+        if allow_paste && accessibility_trusted() {
             simulate_paste_cmd_v()?;
             return Ok(InjectResult::Inserted);
         }
     }
+    let _ = allow_paste; // unused on non-macOS
     Ok(InjectResult::CopiedToClipboard)
 }
 
@@ -66,7 +72,7 @@ mod tests {
 
     #[test]
     fn empty_text_errors() {
-        assert!(inject_or_clipboard("").is_err());
-        assert!(inject_or_clipboard("   ").is_err());
+        assert!(inject_or_clipboard("", true).is_err());
+        assert!(inject_or_clipboard("   ", false).is_err());
     }
 }
