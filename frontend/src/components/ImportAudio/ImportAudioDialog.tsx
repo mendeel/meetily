@@ -12,6 +12,7 @@ import {
   HardDrive,
   ChevronDown,
   ChevronUp,
+  Users,
 } from 'lucide-react';
 import {
   Dialog,
@@ -30,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select';
+import { Switch } from '../ui/switch';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useImportAudio, ImportResult } from '@/hooks/useImportAudio';
@@ -72,12 +74,18 @@ export function ImportAudioDialog({
 }: ImportAudioDialogProps) {
   const router = useRouter();
   const { refetchMeetings } = useSidebar();
-  const { selectedLanguage, transcriptModelConfig } = useConfig();
+  const {
+    selectedLanguage,
+    transcriptModelConfig,
+    neuralDiarization,
+    diarizationModelAvailable,
+  } = useConfig();
 
   const [title, setTitle] = useState('');
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
+  const [enableDiarization, setEnableDiarization] = useState(false);
 
   // Always start as false — represents "dialog has not yet been opened".
   // Do NOT initialize from the `open` prop: if the component mounts with open=true
@@ -139,6 +147,7 @@ export function ImportAudioDialog({
       setTitleModifiedByUser(false);
       setSelectedLang(selectedLanguage || 'auto');
       setShowAdvanced(false);
+      setEnableDiarization(neuralDiarization && diarizationModelAvailable);
 
       // Validate preselected file if provided
       if (preselectedFile) {
@@ -152,7 +161,7 @@ export function ImportAudioDialog({
       // Fetch available models using centralized hook
       fetchModels();
     }
-  }, [open, preselectedFile, selectedLanguage, transcriptModelConfig, reset, resetSelection, validateFile, fetchModels]);
+  }, [open, preselectedFile, selectedLanguage, transcriptModelConfig, neuralDiarization, diarizationModelAvailable, reset, resetSelection, validateFile, fetchModels]);
 
   // Update title when fileInfo changes
   useEffect(() => {
@@ -192,7 +201,8 @@ export function ImportAudioDialog({
       title || fileInfo.filename,
       isParakeetModel ? null : selectedLang === 'auto' ? null : selectedLang,
       selectedModel?.name || null,
-      selectedModel?.provider || null
+      selectedModel?.provider || null,
+      enableDiarization && diarizationModelAvailable
     );
   };
 
@@ -402,6 +412,27 @@ export function ImportAudioDialog({
                           </Select>
                         </div>
                       )}
+
+                      {/* Speaker diarization */}
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <Users className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm font-medium">Speaker diarization</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {diarizationModelAvailable
+                              ? 'Label speakers (Speaker 1, Speaker 2, …) in the imported transcript'
+                              : 'Download a diarization model in Transcript settings to enable'}
+                          </p>
+                        </div>
+                        <Switch
+                          checked={enableDiarization && diarizationModelAvailable}
+                          onCheckedChange={setEnableDiarization}
+                          disabled={!diarizationModelAvailable}
+                          aria-label="Speaker diarization"
+                        />
+                      </div>
                     </div>
                   )}
                 </div>

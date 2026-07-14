@@ -62,9 +62,22 @@ pub(crate) async fn unload_engine_after_batch(provider: Option<&str>) {
 /// Create transcript segments from transcription results.
 /// Each tuple is (text, start_ms, end_ms) from VAD timestamps.
 pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> Vec<TranscriptSegment> {
+    create_transcript_segments_with_speakers(
+        &transcripts
+            .iter()
+            .map(|(text, start_ms, end_ms)| (text.clone(), *start_ms, *end_ms, None))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Create transcript segments including optional speaker labels.
+/// Each tuple is (text, start_ms, end_ms, speaker).
+pub(crate) fn create_transcript_segments_with_speakers(
+    transcripts: &[(String, f64, f64, Option<String>)],
+) -> Vec<TranscriptSegment> {
     transcripts
         .iter()
-        .map(|(text, start_ms, end_ms)| {
+        .map(|(text, start_ms, end_ms, speaker)| {
             let start_seconds = start_ms / 1000.0;
             let end_seconds = end_ms / 1000.0;
             let duration = end_seconds - start_seconds;
@@ -76,7 +89,7 @@ pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> 
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
-                speaker: None,
+                speaker: speaker.clone(),
             }
         })
         .collect()

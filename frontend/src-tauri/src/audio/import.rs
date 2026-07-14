@@ -19,9 +19,14 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{
+    create_transcript_segments, create_transcript_segments_with_speakers, split_segment_at_silence,
+    write_transcripts_json,
+};
 use super::constants::AUDIO_EXTENSIONS;
+use super::diarization::{shared_from_models_dir, SharedDiarizer};
 use super::recording_preferences::get_default_recordings_folder;
+use super::recording_state::DeviceType;
 
 /// Global flag to track if import is in progress
 static IMPORT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -259,6 +264,7 @@ pub async fn start_import<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    enable_diarization: bool,
 ) -> Result<ImportResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
@@ -273,6 +279,7 @@ pub async fn start_import<R: Runtime>(
         language,
         model,
         provider.clone(),
+        enable_diarization,
     )
     .await;
 
@@ -315,6 +322,7 @@ async fn run_import<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    enable_diarization: bool,
 ) -> Result<ImportResult> {
     let source = PathBuf::from(&source_path);
 
@@ -324,8 +332,8 @@ async fn run_import<R: Runtime>(
     }
 
     info!(
-        "Starting import for '{}' from {} with language {:?}, model {:?}, provider {:?}",
-        title, source_path, language, model, provider
+        "Starting import for '{}' from {} with language {:?}, model {:?}, provider {:?}, diarization={}",
+        title, source_path, language, model, provider, enable_diarization
     );
 
     // Determine which provider to use (default to whisper)
@@ -551,8 +559,44 @@ async fn run_import<R: Runtime>(
     let processable_count = processable_segments.len();
     info!("Processing {} segments (after splitting)", processable_count);
 
+    // Optional neural diarization for mixed imported audio (labels as speaker_1…N)
+    let diarizer: Option<SharedDiarizer> = if enable_diarization {
+        let models_dir = crate::audio::diarization::commands::get_or_init_manager()
+            .ok()
+            .map(|m| m.models_dir().to_path_buf());
+        match models_dir {
+            Some(dir) => {
+                let shared = shared_from_models_dir(Some(&dir));
+                let neural_ok = if let Ok(mut guard) = shared.lock() {
+                    guard.set_user_enabled(true);
+                    guard.is_neural_enabled()
+                } else {
+                    false
+                };
+                if neural_ok {
+                    info!("Import diarization enabled (models at {})", dir.display());
+                    Some(shared)
+                } else {
+                    warn!(
+                        "Import diarization requested but WeSpeaker model missing/unloadable under {} — skipping speaker labels",
+                        dir.display()
+                    );
+                    None
+                }
+            }
+            None => {
+                warn!(
+                    "Import diarization requested but model manager unavailable — skipping speaker labels"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Process each speech segment
-    let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
+    let mut all_transcripts: Vec<(String, f64, f64, Option<String>)> = Vec::new();
     let mut total_confidence = 0.0f32;
 
     for (i, segment) in processable_segments.iter().enumerate() {
@@ -611,12 +655,25 @@ async fn run_import<R: Runtime>(
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
+            let speaker = diarizer.as_ref().and_then(|shared| {
+                let mut guard = shared.lock().ok()?;
+                if !guard.is_neural_enabled() {
+                    return None;
+                }
+                Some(guard.assign_speaker(&DeviceType::System, &segment.samples))
+            });
+
             debug!(
-                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
-                i + 1, processable_count, segment_duration_sec, conf,
+                "Segment {}/{}: {:.1}s, conf={:.2}, speaker={:?}, text='{}'",
+                i + 1, processable_count, segment_duration_sec, conf, speaker,
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
-            all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            all_transcripts.push((
+                text,
+                segment.start_timestamp_ms,
+                segment.end_timestamp_ms,
+                speaker,
+            ));
             total_confidence += conf;
         } else {
             debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
@@ -644,7 +701,7 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "saving", 85, "Creating meeting...");
 
     // Create transcript segments
-    let segments = create_transcript_segments(&all_transcripts);
+    let segments = create_transcript_segments_with_speakers(&all_transcripts);
 
     // Save to database
     let app_state = app
@@ -733,8 +790,8 @@ async fn create_meeting_with_transcripts(
     // Insert transcripts
     for segment in segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -743,6 +800,7 @@ async fn create_meeting_with_transcripts(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
+        .bind(&segment.speaker)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
@@ -1028,15 +1086,27 @@ pub async fn start_import_audio_command<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    enable_diarization: Option<bool>,
 ) -> Result<ImportStarted, String> {
     // Check if import is already in progress (guard will be acquired in start_import)
     if IMPORT_IN_PROGRESS.load(Ordering::SeqCst) {
         return Err("Import already in progress".to_string());
     }
 
+    let enable_diarization = enable_diarization.unwrap_or(false);
+
     // Spawn import in background
     tauri::async_runtime::spawn(async move {
-        let result = start_import(app, source_path, title, language, model, provider).await;
+        let result = start_import(
+            app,
+            source_path,
+            title,
+            language,
+            model,
+            provider,
+            enable_diarization,
+        )
+        .await;
 
         if let Err(e) = result {
             error!("Import failed: {}", e);
