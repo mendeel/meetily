@@ -1,11 +1,10 @@
 //! Online speaker assignment for system-audio ASR segments.
 //!
-//! Pyannote-rs-style pipeline (segmentation duty-cycled via upstream VAD +
-//! embedding clustering). Full WeSpeaker ONNX via `pyannote-rs` is blocked by
-//! an ort 2.0.0-rc.12 API mismatch, so when the downloadable model bundle is
-//! present we run a local spectral embedding + cosine clustering backend that
-//! mirrors the same `speaker_N` labeling contract. Missing models → channel-only.
+//! Pipeline: VAD segment → WeSpeaker ONNX embedding (spectral fallback) →
+//! cosine clustering with frozen centroids → `speaker_N` labels.
+//! Missing models → channel-only provisional labels.
 
+use super::embedding::SpeakerEmbeddingExtractor;
 use super::models::DiarizationModelManager;
 use crate::audio::recording_state::DeviceType;
 use log::{debug, info, warn};
@@ -13,9 +12,14 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-const SIMILARITY_THRESHOLD: f32 = 0.72;
+/// Cosine similarity threshold for WeSpeaker space.
+/// pyannote-rs examples use 0.5; plan range is ~0.75–0.85. Start at 0.75
+/// (stricter match → less collapse across similar voices).
+const SIMILARITY_THRESHOLD: f32 = 0.75;
 const MAX_SPEAKERS: usize = 10;
-const EMBED_DIM: usize = 64;
+const SPECTRAL_EMBED_DIM: usize = 64;
+/// Minimum segment length for a stable embedding (~1s at 16 kHz).
+const MIN_SAMPLES: usize = 16_000;
 
 /// User preference for neural-style clustering (default on; effective only when models exist).
 static NEURAL_PREFERENCE: AtomicBool = AtomicBool::new(true);
@@ -71,13 +75,15 @@ pub fn provisional_speaker_for_device(device: &DeviceType) -> &'static str {
 /// Live online diarizer. Safe to share across workers via `Arc<Mutex<_>>`.
 pub struct OnlineDiarizer {
     /// When None, always return channel-only provisional labels.
-    backend: Option<SpectralBackend>,
+    backend: Option<ClusteringBackend>,
     /// User toggle ("Enable neural-style clustering"). Models may be present while this is false.
     user_enabled: bool,
 }
 
-struct SpectralBackend {
+struct ClusteringBackend {
     centroids: Vec<Vec<f32>>,
+    /// WeSpeaker ONNX session when load succeeded; otherwise spectral fallback.
+    extractor: Option<SpeakerEmbeddingExtractor>,
 }
 
 impl OnlineDiarizer {
@@ -90,14 +96,16 @@ impl OnlineDiarizer {
         }
     }
 
-    /// Enable neural-style clustering when the diarization model bundle is present.
+    /// Enable neural clustering when the WeSpeaker embedding model is present.
+    /// Prefers WeSpeaker ONNX embeddings; falls back to spectral fingerprints if
+    /// the session fails to load. Segmentation ONNX is not required for clustering
+    /// (speaker-change detection via segmentation remains out of scope).
     pub fn try_load(models_dir: &Path) -> Self {
         let user_enabled = neural_enabled_preference();
-        let embedding = models_dir.join("wespeaker_en_voxceleb_CAM++.onnx");
-        let segmentation = models_dir.join("segmentation-3.0.onnx");
-        if !(embedding.exists() && segmentation.exists()) {
+        let embedding_path = models_dir.join("wespeaker_en_voxceleb_CAM++.onnx");
+        if !embedding_path.exists() {
             warn!(
-                "Diarization model bundle incomplete under {} — falling back to channel-only",
+                "WeSpeaker model missing under {} — falling back to channel-only",
                 models_dir.display()
             );
             return Self {
@@ -106,27 +114,34 @@ impl OnlineDiarizer {
             };
         }
 
-        // Bundle present: enable online spectral clustering (pyannote-rs-style contract).
-        // Full WeSpeaker ORT path lands when pyannote-rs supports ort 2.0.0-rc.12.
-        info!(
-            "OnlineDiarizer: model bundle found at {} — neural preference={}",
-            models_dir.display(),
-            user_enabled
-        );
+        let extractor = match SpeakerEmbeddingExtractor::try_load(&embedding_path) {
+            Ok(ext) => {
+                info!(
+                    "OnlineDiarizer: WeSpeaker embeddings enabled (neural preference={})",
+                    user_enabled
+                );
+                Some(ext)
+            }
+            Err(e) => {
+                warn!(
+                    "OnlineDiarizer: WeSpeaker load failed ({}); using spectral embedding fallback",
+                    e
+                );
+                None
+            }
+        };
+
         Self {
-            backend: Some(SpectralBackend {
+            backend: Some(ClusteringBackend {
                 centroids: Vec::new(),
+                extractor,
             }),
             user_enabled,
         }
     }
 
     pub fn try_from_manager(manager: &DiarizationModelManager) -> Self {
-        if manager.is_available() {
-            Self::try_load(manager.models_dir())
-        } else {
-            Self::channel_only()
-        }
+        Self::try_load(manager.models_dir())
     }
 
     /// Toggle the "Enable neural-style clustering" flag without unloading models.
@@ -161,11 +176,23 @@ impl OnlineDiarizer {
             return "others".to_string();
         };
 
-        if samples_f32.len() < 1600 {
+        if samples_f32.len() < MIN_SAMPLES {
+            debug!(
+                "Diarizer: segment too short ({} samples < {}); labeling others",
+                samples_f32.len(),
+                MIN_SAMPLES
+            );
             return "others".to_string();
         }
 
-        let embedding = compute_spectral_embedding(samples_f32);
+        let embedding = match backend.compute_embedding(samples_f32) {
+            Some(e) => e,
+            None => {
+                debug!("Diarizer: embedding failed — using others");
+                return "others".to_string();
+            }
+        };
+
         match backend.assign(&embedding) {
             Some(idx) => {
                 let label = format!("speaker_{}", idx + 1);
@@ -180,49 +207,94 @@ impl OnlineDiarizer {
     }
 }
 
-impl SpectralBackend {
+impl ClusteringBackend {
+    fn compute_embedding(&mut self, samples_f32: &[f32]) -> Option<Vec<f32>> {
+        if let Some(ref mut extractor) = self.extractor {
+            match extractor.embed(samples_f32) {
+                Ok(emb) => return Some(emb),
+                Err(e) => {
+                    warn!(
+                        "WeSpeaker embed failed ({}); falling back to spectral for this segment",
+                        e
+                    );
+                }
+            }
+        }
+        Some(compute_spectral_embedding(samples_f32))
+    }
+
     fn assign(&mut self, embedding: &[f32]) -> Option<usize> {
         let mut best_idx = None;
-        let mut best_sim = SIMILARITY_THRESHOLD;
+        let mut best_sim = f32::NEG_INFINITY;
+        let mut second_best = f32::NEG_INFINITY;
 
         for (i, centroid) in self.centroids.iter().enumerate() {
             let sim = cosine_similarity(embedding, centroid);
             if sim > best_sim {
+                second_best = best_sim;
                 best_sim = sim;
                 best_idx = Some(i);
+            } else if sim > second_best {
+                second_best = sim;
             }
         }
 
+        debug!(
+            "Diarizer cluster: best_sim={:.4}, second_best={:.4}, centroids={}, threshold={:.2}",
+            if best_sim.is_finite() { best_sim } else { 0.0 },
+            if second_best.is_finite() {
+                second_best
+            } else {
+                0.0
+            },
+            self.centroids.len(),
+            SIMILARITY_THRESHOLD
+        );
+
         if let Some(idx) = best_idx {
-            // EMA update of matched centroid
-            let c = &mut self.centroids[idx];
-            for (i, v) in embedding.iter().enumerate() {
-                if i < c.len() {
-                    c[i] = 0.85 * c[i] + 0.15 * v;
-                }
+            if best_sim > SIMILARITY_THRESHOLD {
+                // Freeze centroid on create — no EMA drift.
+                debug!(
+                    "Diarizer matched speaker_{} (sim={:.4})",
+                    idx + 1,
+                    best_sim
+                );
+                return Some(idx);
             }
-            return Some(idx);
         }
 
         if self.centroids.len() < MAX_SPEAKERS {
             self.centroids.push(embedding.to_vec());
-            return Some(self.centroids.len() - 1);
+            let idx = self.centroids.len() - 1;
+            debug!(
+                "Diarizer new speaker_{} (best_sim={:.4} below threshold)",
+                idx + 1,
+                if best_sim.is_finite() { best_sim } else { 0.0 }
+            );
+            return Some(idx);
         }
 
         // At capacity — force best match even below threshold
-        self.centroids
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (i, cosine_similarity(embedding, c)))
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
+        debug!(
+            "Diarizer at capacity; forcing speaker_{} (sim={:.4})",
+            best_idx.map(|i| i + 1).unwrap_or(1),
+            if best_sim.is_finite() { best_sim } else { 0.0 }
+        );
+        best_idx.or_else(|| {
+            self.centroids
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i, cosine_similarity(embedding, c)))
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+        })
     }
 }
 
-/// Compact log-mel style spectral fingerprint used as a speaker embedding.
+/// Compact log-mel style spectral fingerprint used as a last-resort embedding.
 fn compute_spectral_embedding(samples: &[f32]) -> Vec<f32> {
-    let mut bands = vec![0.0f32; EMBED_DIM];
-    let mut counts = vec![0u32; EMBED_DIM];
+    let mut bands = vec![0.0f32; SPECTRAL_EMBED_DIM];
+    let mut counts = vec![0u32; SPECTRAL_EMBED_DIM];
 
     let frame = 512.min(samples.len());
     if frame < 64 {
@@ -248,8 +320,8 @@ fn compute_spectral_embedding(samples: &[f32]) -> Vec<f32> {
             let n = spectrum.len().max(1);
             for (k, bin) in spectrum.iter().enumerate() {
                 let mag = (bin.re * bin.re + bin.im * bin.im).sqrt();
-                let band = (k * EMBED_DIM) / n;
-                if band < EMBED_DIM {
+                let band = (k * SPECTRAL_EMBED_DIM) / n;
+                if band < SPECTRAL_EMBED_DIM {
                     bands[band] += mag;
                     counts[band] += 1;
                 }
@@ -258,7 +330,7 @@ fn compute_spectral_embedding(samples: &[f32]) -> Vec<f32> {
         offset += hop;
     }
 
-    for i in 0..EMBED_DIM {
+    for i in 0..SPECTRAL_EMBED_DIM {
         if counts[i] > 0 {
             bands[i] = (bands[i] / counts[i] as f32 + 1e-8).ln();
         }
@@ -306,4 +378,84 @@ pub fn shared_from_models_dir(models_dir: Option<&Path>) -> SharedDiarizer {
         None => OnlineDiarizer::channel_only(),
     };
     Arc::new(Mutex::new(diarizer))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::recording_state::DeviceType;
+
+    fn l2(v: &mut [f32]) {
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-8);
+        for x in v.iter_mut() {
+            *x /= n;
+        }
+    }
+
+    #[test]
+    fn clustering_assigns_multiple_speakers_for_dissimilar_embeddings() {
+        let mut backend = ClusteringBackend {
+            centroids: Vec::new(),
+            extractor: None,
+        };
+
+        let mut e1 = vec![0.0f32; SPECTRAL_EMBED_DIM];
+        e1[0] = 1.0;
+        l2(&mut e1);
+
+        let mut e2 = vec![0.0f32; SPECTRAL_EMBED_DIM];
+        e2[1] = 1.0;
+        l2(&mut e2);
+
+        assert_eq!(backend.assign(&e1), Some(0));
+        assert_eq!(backend.assign(&e2), Some(1));
+        // Near-identical to first speaker should rematch speaker_1 (idx 0)
+        assert_eq!(backend.assign(&e1), Some(0));
+        assert_eq!(backend.centroids.len(), 2);
+    }
+
+    #[test]
+    fn assign_speaker_mic_is_you_and_short_system_is_others() {
+        let mut diarizer = OnlineDiarizer {
+            backend: Some(ClusteringBackend {
+                centroids: Vec::new(),
+                extractor: None,
+            }),
+            user_enabled: true,
+        };
+
+        assert_eq!(
+            diarizer.assign_speaker(&DeviceType::Microphone, &[0.1; 32_000]),
+            "you"
+        );
+        // Below MIN_SAMPLES → others
+        assert_eq!(
+            diarizer.assign_speaker(&DeviceType::System, &[0.1; 8_000]),
+            "others"
+        );
+    }
+
+    #[test]
+    fn centroids_are_frozen_on_match() {
+        let mut backend = ClusteringBackend {
+            centroids: Vec::new(),
+            extractor: None,
+        };
+        let mut e1 = vec![0.0f32; SPECTRAL_EMBED_DIM];
+        e1[0] = 1.0;
+        l2(&mut e1);
+        backend.assign(&e1);
+        let before = backend.centroids[0].clone();
+
+        // Slightly perturbed but still above threshold vs frozen centroid
+        let mut e1b = e1.clone();
+        e1b[0] = 0.99;
+        e1b[1] = 0.1;
+        l2(&mut e1b);
+        assert_eq!(backend.assign(&e1b), Some(0));
+        assert_eq!(
+            backend.centroids[0], before,
+            "matched centroid must not EMA-update"
+        );
+    }
 }

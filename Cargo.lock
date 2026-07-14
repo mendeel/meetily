@@ -3568,6 +3568,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "knf-rs"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15ebe7cf9eae245a44ab76cabdd06c0b3769972fd06050ed9aea6a22ff0d682f"
+dependencies = [
+ "eyre",
+ "knf-rs-sys",
+ "ndarray 0.16.1",
+]
+
+[[package]]
+name = "knf-rs-sys"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9aa7679fdc0ecdaab1f4e7c9603413f303765f33c8e34e6ca4f26e7d61d6023"
+dependencies = [
+ "bindgen 0.69.5",
+ "cmake",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3892,10 +3913,11 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "infer 0.15.0",
+ "knf-rs",
  "lazy_static",
  "log",
  "memory-stats",
- "ndarray",
+ "ndarray 0.17.2",
  "nnnoiseless",
  "objc",
  "once_cell",
@@ -4088,6 +4110,21 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "tempfile",
+]
+
+[[package]]
+name = "ndarray"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rawpointer",
 ]
 
 [[package]]
@@ -4672,7 +4709,7 @@ version = "2.0.0-rc.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133"
 dependencies = [
- "ndarray",
+ "ndarray 0.17.2",
  "ort-sys",
  "smallvec",
  "tracing",
@@ -4743,7 +4780,7 @@ checksum = "63f887c35960ee3e101563a384021d9555ad9d693fe696f85119fa39537669df"
 dependencies = [
  "eyre",
  "hound",
- "ndarray",
+ "ndarray 0.17.2",
  "ort",
  "realfft",
  "serde",
@@ -6211,7 +6248,7 @@ dependencies = [
  "anyhow",
  "approx",
  "hound",
- "ndarray",
+ "ndarray 0.17.2",
  "ort",
  "rubato 0.16.2",
  "serde",

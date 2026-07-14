@@ -1,8 +1,8 @@
 //! Downloadable diarization model bundle under `models/diarization/`.
 //!
 //! Bundle files (pyannote-rs release assets):
-//! - `segmentation-3.0.onnx`
-//! - `wespeaker_en_voxceleb_CAM++.onnx`
+//! - `wespeaker_en_voxceleb_CAM++.onnx` (required — speaker embeddings)
+//! - `segmentation-3.0.onnx` (downloaded with the bundle; not used for clustering yet)
 
 use anyhow::{anyhow, Result};
 use log::{info, warn};
@@ -94,12 +94,13 @@ impl DiarizationModelManager {
         }
     }
 
-    /// Download the model bundle. Safe to call when already present (no-op).
+    /// Download the model bundle. Safe to call when already complete (no-op).
+    /// Downloads any missing files (WeSpeaker required; segmentation optional for now).
     pub async fn download_models(
         &self,
         progress: Option<Box<dyn Fn(u8) + Send + Sync>>,
     ) -> Result<()> {
-        if self.is_available() {
+        if embedding_present(&self.models_dir) && segmentation_present(&self.models_dir) {
             *self.status.write().await = DiarizationModelStatus::Available;
             return Ok(());
         }
@@ -157,12 +158,16 @@ impl DiarizationModelManager {
             }
         }
 
-        if bundle_present(&self.models_dir) {
+        if embedding_present(&self.models_dir) {
             *self.status.write().await = DiarizationModelStatus::Available;
-            info!("Diarization model bundle ready at {}", self.models_dir.display());
+            info!(
+                "Diarization WeSpeaker model ready at {} (segmentation present={})",
+                self.models_dir.display(),
+                segmentation_present(&self.models_dir)
+            );
             Ok(())
         } else {
-            let msg = "Diarization download finished but bundle incomplete".to_string();
+            let msg = "Diarization download finished but WeSpeaker model missing".to_string();
             warn!("{}", msg);
             *self.status.write().await = DiarizationModelStatus::Error {
                 message: msg.clone(),
@@ -172,6 +177,15 @@ impl DiarizationModelManager {
     }
 }
 
+/// True when WeSpeaker is on disk — enough to run speaker embedding + clustering.
+fn embedding_present(dir: &Path) -> bool {
+    dir.join(EMBEDDING_FILE).exists()
+}
+
+fn segmentation_present(dir: &Path) -> bool {
+    dir.join(SEGMENTATION_FILE).exists()
+}
+
 fn bundle_present(dir: &Path) -> bool {
-    dir.join(EMBEDDING_FILE).exists() && dir.join(SEGMENTATION_FILE).exists()
+    embedding_present(dir)
 }

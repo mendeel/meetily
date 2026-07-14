@@ -4,6 +4,7 @@
 //! refined to `"speaker_1"`, `"speaker_2"`, … when ONNX models are present under
 //! `models/diarization/`. Missing models fall back to channel-only labels.
 
+pub mod embedding;
 pub mod models;
 pub mod online;
 pub mod commands;

@@ -110,9 +110,10 @@ thiserror = "2.0.16"                # Error handling for Parakeet / Nemotron / Q
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 rustfft = "6"
 
-# Note: pyannote-rs is incompatible with ort 2.0.0-rc.12 (ndarray/ort API mismatch).
-# Diarization uses a pyannote-rs-style online clustering module under audio/diarization/
-# with downloadable model bundle under models/diarization/ and channel-only fallback.
+# Diarization: WeSpeaker ONNX via ort (same stack as Parakeet/Silero). knf-rs provides
+# kaldi-native-fbank features matching the wespeaker_en_voxceleb_CAM++.onnx contract.
+# Full pyannote-rs crate is not used (ort version mismatch); we mirror its embedding path.
+knf-rs = "0.3.2"
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
