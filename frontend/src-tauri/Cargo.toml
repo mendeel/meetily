@@ -102,10 +102,13 @@ nnnoiseless = "0.5"
 futures-util = "0.3"
 silero_rs = { path = "vendor/silero", package = "silero" }
 
-# Parakeet / Nemotron (ONNX-based fast transcription) dependencies
-ort = { version = "2.0.0-rc.12" }  # ONNX Runtime for Parakeet + Nemotron models
+# Parakeet / Nemotron / Qwen (ONNX-based fast transcription) dependencies
+ort = { version = "2.0.0-rc.12" }  # ONNX Runtime for Parakeet + Nemotron + Qwen models
 parakeet-rs = "0.3.6"               # Nemotron ASR streaming via ONNX
-thiserror = "2.0.16"                # Error handling for Parakeet / Nemotron
+thiserror = "2.0.16"                # Error handling for Parakeet / Nemotron / Qwen
+# Qwen3-ASR: HF BPE tokenizer + FFT for Whisper-style log-mel frontend
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+rustfft = "6"
 
 # Note: pyannote-rs is incompatible with ort 2.0.0-rc.12 (ndarray/ort API mismatch).
 # Diarization uses a pyannote-rs-style online clustering module under audio/diarization/
