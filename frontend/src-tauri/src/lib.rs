@@ -484,6 +484,16 @@ pub fn run() {
                 }
             });
 
+            // Set Qwen models directory
+            qwen_engine::commands::set_models_directory(&_app.handle());
+
+            // Initialize Qwen engine on startup
+            tauri::async_runtime::spawn(async {
+                if let Err(e) = qwen_engine::commands::qwen_init().await {
+                    log::error!("Failed to initialize Qwen engine on startup: {}", e);
+                }
+            });
+
             // Diarization models directory (system-audio speaker labels)
             audio::diarization::set_diarization_models_directory(&_app.handle());
             tauri::async_runtime::spawn(async {
@@ -625,6 +635,22 @@ pub fn run() {
             nemotron_engine::commands::nemotron_cancel_download,
             nemotron_engine::commands::nemotron_delete_corrupted_model,
             nemotron_engine::commands::open_nemotron_models_folder,
+            // Qwen engine commands
+            qwen_engine::commands::qwen_init,
+            qwen_engine::commands::qwen_get_available_models,
+            qwen_engine::commands::qwen_load_model,
+            qwen_engine::commands::qwen_get_current_model,
+            qwen_engine::commands::qwen_is_model_loaded,
+            qwen_engine::commands::qwen_has_available_models,
+            qwen_engine::commands::qwen_validate_model_ready,
+            qwen_engine::commands::qwen_transcribe_audio,
+            qwen_engine::commands::qwen_transcribe_audio_with_language,
+            qwen_engine::commands::qwen_get_models_directory,
+            qwen_engine::commands::qwen_download_model,
+            qwen_engine::commands::qwen_retry_download,
+            qwen_engine::commands::qwen_cancel_download,
+            qwen_engine::commands::qwen_delete_corrupted_model,
+            qwen_engine::commands::open_qwen_models_folder,
             // Dictation orchestration
             dictation::commands::dictation_get_config,
             dictation::commands::dictation_set_config,
