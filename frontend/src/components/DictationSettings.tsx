@@ -47,6 +47,10 @@ export function DictationSettings() {
   const [backendUnavailable, setBackendUnavailable] = useState(false);
   const [accessibilityTrusted, setAccessibilityTrusted] = useState<boolean | null>(null);
   const [checkingAccessibility, setCheckingAccessibility] = useState(false);
+  const [micGranted, setMicGranted] = useState<boolean | null>(null);
+  const [checkingMic, setCheckingMic] = useState(false);
+  const [testingDictation, setTestingDictation] = useState(false);
+  const [testListening, setTestListening] = useState(false);
 
   const loadAccessibilityStatus = useCallback(async () => {
     setCheckingAccessibility(true);
@@ -58,6 +62,29 @@ export function DictationSettings() {
       setAccessibilityTrusted(null);
     } finally {
       setCheckingAccessibility(false);
+    }
+  }, []);
+
+  const requestMicPermission = useCallback(async () => {
+    setCheckingMic(true);
+    try {
+      const granted = await invoke<boolean>('trigger_microphone_permission');
+      setMicGranted(granted);
+      if (granted) {
+        toast.success('Microphone access granted');
+      } else {
+        toast.error('Microphone access denied', {
+          description: 'Enable Meetily in System Settings → Privacy & Security → Microphone.',
+        });
+      }
+    } catch (error) {
+      console.error('Failed to request microphone permission:', error);
+      setMicGranted(false);
+      toast.error('Could not request microphone permission', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setCheckingMic(false);
     }
   }, []);
 
@@ -117,6 +144,29 @@ export function DictationSettings() {
       toast.error('Could not open Accessibility settings', {
         description: error instanceof Error ? error.message : String(error),
       });
+    }
+  };
+
+  const handleTestDictation = async () => {
+    setTestingDictation(true);
+    try {
+      if (testListening) {
+        await invoke('dictation_stop');
+        setTestListening(false);
+        toast.message('Test dictation stopped — processing…');
+      } else {
+        await invoke('dictation_start');
+        setTestListening(true);
+        toast.message('Listening — speak, then click Stop Test');
+      }
+    } catch (error) {
+      console.error('Test dictation failed:', error);
+      setTestListening(false);
+      toast.error('Test dictation failed', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setTestingDictation(false);
     }
   };
 
@@ -299,6 +349,42 @@ export function DictationSettings() {
         </Select>
       </div>
 
+      {/* Microphone */}
+      <div className="p-4 border rounded-lg space-y-4">
+        <div>
+          <div className="font-medium">Microphone Permission</div>
+          <div className="text-sm text-gray-600">
+            Required to capture speech for dictation. Click Request to prompt the system dialog.
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          {micGranted === true && (
+            <span className="inline-flex items-center gap-1.5 text-sm text-green-700">
+              <CheckCircle2 className="w-4 h-4" />
+              Microphone granted
+            </span>
+          )}
+          {micGranted === false && (
+            <span className="inline-flex items-center gap-1.5 text-sm text-amber-700">
+              <AlertCircle className="w-4 h-4" />
+              Microphone denied or unavailable
+            </span>
+          )}
+          {micGranted === null && (
+            <span className="text-sm text-gray-500">Not checked yet</span>
+          )}
+          <button
+            type="button"
+            onClick={() => void requestMicPermission()}
+            disabled={checkingMic}
+            className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
+          >
+            <Mic2 className={`w-4 h-4 ${checkingMic ? 'animate-pulse' : ''}`} />
+            {checkingMic ? 'Requesting…' : 'Request microphone'}
+          </button>
+        </div>
+      </div>
+
       {/* Accessibility */}
       <div className="p-4 border rounded-lg space-y-4">
         <div>
@@ -342,6 +428,26 @@ export function DictationSettings() {
             Open Accessibility Settings
           </button>
         </div>
+      </div>
+
+      {/* Test */}
+      <div className="p-4 border rounded-lg space-y-3">
+        <div>
+          <div className="font-medium">Test Dictation</div>
+          <div className="text-sm text-gray-600">
+            Starts the same flow as the global shortcut. Speak, then click again to stop and
+            insert.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleTestDictation()}
+          disabled={testingDictation || !config.enabled || backendUnavailable}
+          className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
+        >
+          <Mic2 className="w-4 h-4" />
+          {testingDictation ? 'Working…' : testListening ? 'Stop Test' : 'Test Dictation'}
+        </button>
       </div>
 
       {/* Help */}

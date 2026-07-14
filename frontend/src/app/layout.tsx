@@ -131,6 +131,21 @@ export default function RootLayout({
     };
   }, [showOnboarding]);
 
+  // Clipboard fallback toast for dictation (main window only — pill route has no Toaster)
+  useEffect(() => {
+    if (isDictationPill) return;
+
+    const unlisten = listen<{ text: string; delivery: string }>('dictation-result', (event) => {
+      if (event.payload.delivery === 'clipboard') {
+        toast.message('Copied — paste with ⌘V');
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [isDictationPill]);
+
   // Handle file drop for audio import
   const handleFileDrop = useCallback((paths: string[]) => {
     // Check if beta features are enabled (read from localStorage directly since we're outside ConfigProvider)

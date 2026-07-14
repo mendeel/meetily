@@ -48,7 +48,12 @@ impl DictationConfig {
                 return *profile;
             }
         }
-        super::profiles::profile_for_app(app_name, bundle_id)
+        let builtin = super::profiles::profile_for_app(app_name, bundle_id);
+        if builtin == PolishProfile::Default {
+            self.default_profile
+        } else {
+            builtin
+        }
     }
 }
 
@@ -107,6 +112,26 @@ mod tests {
         assert_eq!(
             c.resolve_profile("Slack", Some("com.tinyspeck.slackmacgap")),
             PolishProfile::Ide
+        );
+    }
+
+    #[test]
+    fn default_profile_applies_when_builtin_is_default() {
+        let mut c = DictationConfig::default();
+        c.default_profile = PolishProfile::Email;
+        assert_eq!(
+            c.resolve_profile("WeirdApp", Some("com.example.weird")),
+            PolishProfile::Email
+        );
+    }
+
+    #[test]
+    fn builtin_mapping_beats_default_profile() {
+        let mut c = DictationConfig::default();
+        c.default_profile = PolishProfile::Email;
+        assert_eq!(
+            c.resolve_profile("Slack", Some("com.tinyspeck.slackmacgap")),
+            PolishProfile::Chat
         );
     }
 }
