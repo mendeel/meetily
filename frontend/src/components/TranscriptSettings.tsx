@@ -4,10 +4,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
-import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
+import { Switch } from './ui/switch';
+import { Eye, EyeOff, Lock, Unlock, Download } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { NemotronModelManager } from './NemotronModelManager';
+import { useConfig } from '@/contexts/ConfigContext';
 
 
 export interface TranscriptModelProps {
@@ -30,6 +32,15 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(true);
     const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
     const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
+    const [diarizationDownloading, setDiarizationDownloading] = useState(false);
+    const [diarizationDownloadProgress, setDiarizationDownloadProgress] = useState<number | null>(null);
+    const {
+        showSpeakerLabels,
+        toggleSpeakerLabels,
+        neuralDiarization,
+        toggleNeuralDiarization,
+        diarizationModelAvailable,
+    } = useConfig();
 
     // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
     useEffect(() => {
@@ -41,6 +52,52 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
             setApiKey(null);
         }
     }, [transcriptModelConfig.provider]);
+
+    useEffect(() => {
+        let unlistenProgress: (() => void) | undefined;
+        let unlistenComplete: (() => void) | undefined;
+        (async () => {
+            try {
+                const { listen } = await import('@tauri-apps/api/event');
+                unlistenProgress = await listen<{ percent?: number; status?: string }>(
+                    'diarization-model-download-progress',
+                    (event) => {
+                        const pct = event.payload?.percent;
+                        if (typeof pct === 'number') {
+                            setDiarizationDownloadProgress(pct);
+                        }
+                        if (event.payload?.status === 'completed') {
+                            setDiarizationDownloading(false);
+                            setDiarizationDownloadProgress(100);
+                        }
+                    }
+                );
+                unlistenComplete = await listen('diarization-model-download-complete', () => {
+                    setDiarizationDownloading(false);
+                    setDiarizationDownloadProgress(100);
+                });
+            } catch {
+                // Outside Tauri
+            }
+        })();
+        return () => {
+            unlistenProgress?.();
+            unlistenComplete?.();
+        };
+    }, []);
+
+    const downloadDiarizationModels = async () => {
+        if (diarizationDownloading) return;
+        setDiarizationDownloading(true);
+        setDiarizationDownloadProgress(0);
+        try {
+            await invoke('diarization_download_models');
+        } catch (err) {
+            console.error('Failed to download diarization models:', err);
+            setDiarizationDownloading(false);
+            setDiarizationDownloadProgress(null);
+        }
+    };
 
     const fetchApiKey = async (provider: string) => {
         try {
@@ -198,6 +255,56 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                         </div>
                     )}
 
+                    {/* Speaker / diarization preferences */}
+                    <div className="mt-6 space-y-4 border-t border-gray-200 pt-4">
+                        <div className="flex items-center justify-between gap-4">
+                            <div>
+                                <p className="text-sm font-medium text-gray-700">Speaker labels</p>
+                                <p className="text-xs text-gray-500">
+                                    Show You / Speaker N next to each transcript line
+                                </p>
+                            </div>
+                            <Switch
+                                checked={showSpeakerLabels}
+                                onCheckedChange={toggleSpeakerLabels}
+                            />
+                        </div>
+                        <div className="flex items-center justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-gray-700">Neural diarization</p>
+                                <p className="text-xs text-gray-500">
+                                    {diarizationModelAvailable
+                                        ? 'Identify remote speakers (Speaker 1, Speaker 2, …) on system audio'
+                                        : 'Download a diarization model to enable Speaker 1…N labels (channel labels still work)'}
+                                </p>
+                                {!diarizationModelAvailable && (
+                                    <div className="mt-2 flex items-center gap-2">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={downloadDiarizationModels}
+                                            disabled={diarizationDownloading}
+                                            className="h-8"
+                                        >
+                                            <Download className="mr-1.5 h-3.5 w-3.5" />
+                                            {diarizationDownloading
+                                                ? diarizationDownloadProgress != null
+                                                    ? `Downloading… ${diarizationDownloadProgress}%`
+                                                    : 'Downloading…'
+                                                : 'Download model'}
+                                        </Button>
+                                    </div>
+                                )}
+                            </div>
+                            <Switch
+                                checked={neuralDiarization}
+                                onCheckedChange={toggleNeuralDiarization}
+                                disabled={!diarizationModelAvailable}
+                                aria-label="Neural diarization"
+                            />
+                        </div>
+                    </div>
 
                     {requiresApiKey && (
                         <div>

@@ -62,6 +62,12 @@ interface ConfigContextType {
   // UI preferences
   showConfidenceIndicator: boolean;
   toggleConfidenceIndicator: (checked: boolean) => void;
+  showSpeakerLabels: boolean;
+  toggleSpeakerLabels: (checked: boolean) => void;
+  neuralDiarization: boolean;
+  toggleNeuralDiarization: (checked: boolean) => void;
+  /** True when a diarization model bundle is available (backend check; false if unknown) */
+  diarizationModelAvailable: boolean;
 
   // Beta features
   betaFeatures: BetaFeatures;
@@ -153,6 +159,25 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
     return true;
   });
+
+  const [showSpeakerLabels, setShowSpeakerLabels] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('showSpeakerLabels');
+      return saved !== null ? saved === 'true' : true; // Default on
+    }
+    return true;
+  });
+
+  const [neuralDiarization, setNeuralDiarization] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('neuralDiarization');
+      // Default on — effective only when model is present
+      return saved !== null ? saved === 'true' : true;
+    }
+    return true;
+  });
+
+  const [diarizationModelAvailable, setDiarizationModelAvailable] = useState<boolean>(false);
 
   // Summary configs
   const [isAutoSummary, setisAutoSummary] = useState<boolean>(() => {
@@ -372,6 +397,42 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     'custom-openai': [],
   };
 
+  // Check whether the neural diarization model is available (best-effort; backend may not be ready yet)
+  useEffect(() => {
+    const checkDiarizationModel = async () => {
+      try {
+        const available = await invoke<boolean>('is_diarization_model_available');
+        setDiarizationModelAvailable(!!available);
+      } catch {
+        // Command not registered yet or model manager not shipped — treat as unavailable
+        setDiarizationModelAvailable(false);
+      }
+    };
+    checkDiarizationModel();
+
+    let unlistenComplete: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlistenComplete = await listen('diarization-model-download-complete', () => {
+          checkDiarizationModel();
+        });
+      } catch {
+        // Events unavailable outside Tauri
+      }
+    })();
+
+    // Sync saved preference to Rust so the online diarizer respects it on first recording
+    const saved =
+      typeof window !== 'undefined' ? localStorage.getItem('neuralDiarization') : null;
+    const enabled = saved !== null ? saved === 'true' : true;
+    invoke('set_neural_diarization_enabled', { enabled }).catch(() => {});
+
+    return () => {
+      unlistenComplete?.();
+    };
+  }, []);
+
   // Toggle confidence indicator with localStorage persistence
   const toggleConfidenceIndicator = useCallback((checked: boolean) => {
     setShowConfidenceIndicator(checked);
@@ -380,6 +441,26 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
     // Trigger a custom event to notify other components
     window.dispatchEvent(new CustomEvent('confidenceIndicatorChanged', { detail: checked }));
+  }, []);
+
+  const toggleSpeakerLabels = useCallback((checked: boolean) => {
+    setShowSpeakerLabels(checked);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('showSpeakerLabels', checked.toString());
+    }
+    window.dispatchEvent(new CustomEvent('speakerLabelsChanged', { detail: checked }));
+  }, []);
+
+  const toggleNeuralDiarization = useCallback((checked: boolean) => {
+    setNeuralDiarization(checked);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('neuralDiarization', checked.toString());
+    }
+    window.dispatchEvent(new CustomEvent('neuralDiarizationChanged', { detail: checked }));
+    // Best-effort sync to Rust when the command exists
+    invoke('set_neural_diarization_enabled', { enabled: checked }).catch(() => {
+      // Backend may not expose this yet
+    });
   }, []);
 
   const toggleIsAutoSummary = useCallback((checked: boolean) => {
@@ -497,6 +578,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setSelectedLanguage: handleSetSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
+    showSpeakerLabels,
+    toggleSpeakerLabels,
+    neuralDiarization,
+    toggleNeuralDiarization,
+    diarizationModelAvailable,
     betaFeatures,
     toggleBetaFeature,
     models,
@@ -519,6 +605,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     handleSetSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
+    showSpeakerLabels,
+    toggleSpeakerLabels,
+    neuralDiarization,
+    toggleNeuralDiarization,
+    diarizationModelAvailable,
     betaFeatures,
     toggleBetaFeature,
     models,
