@@ -83,6 +83,62 @@ impl DictationSession {
     }
 }
 
+/// Whether Listening should open a new mic stream or keep the existing one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureStartDecision {
+    StartNew,
+    KeepExisting,
+    NotListening,
+}
+
+pub fn decide_capture_start(phase: DictationPhase, has_capture: bool) -> CaptureStartDecision {
+    match phase {
+        DictationPhase::Listening if has_capture => CaptureStartDecision::KeepExisting,
+        DictationPhase::Listening => CaptureStartDecision::StartNew,
+        _ => CaptureStartDecision::NotListening,
+    }
+}
+
+/// How stop / PTT release should behave given current runtime flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopDecision {
+    /// Enter Transcribing (if needed) and run finalize now.
+    FinalizeNow,
+    /// Start is still in flight (or not yet Listening); finalize after start.
+    PendingStop,
+    /// Already finalizing or nothing actionable.
+    Noop,
+}
+
+pub fn decide_stop(phase: DictationPhase, finalizing: bool) -> StopDecision {
+    if finalizing {
+        return StopDecision::Noop;
+    }
+    match phase {
+        DictationPhase::Listening | DictationPhase::Transcribing => StopDecision::FinalizeNow,
+        DictationPhase::Idle => StopDecision::PendingStop,
+        _ => StopDecision::Noop,
+    }
+}
+
+/// Whether a finalize entry may proceed, no-op, or only clean up idle state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalizeDecision {
+    Proceed,
+    Noop,
+    IdleCleanup,
+}
+
+pub fn decide_finalize(phase: DictationPhase, finalizing: bool) -> FinalizeDecision {
+    if finalizing {
+        FinalizeDecision::Noop
+    } else if phase == DictationPhase::Transcribing {
+        FinalizeDecision::Proceed
+    } else {
+        FinalizeDecision::IdleCleanup
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +180,61 @@ mod tests {
         let mut s = DictationSession::new(TriggerMode::PushToTalk);
         assert!(s.on_hotkey_released().is_ok());
         assert_eq!(s.phase, DictationPhase::Idle);
+    }
+
+    #[test]
+    fn reentrant_listening_keeps_existing_capture() {
+        assert_eq!(
+            decide_capture_start(DictationPhase::Listening, true),
+            CaptureStartDecision::KeepExisting
+        );
+        assert_eq!(
+            decide_capture_start(DictationPhase::Listening, false),
+            CaptureStartDecision::StartNew
+        );
+        assert_eq!(
+            decide_capture_start(DictationPhase::Idle, false),
+            CaptureStartDecision::NotListening
+        );
+    }
+
+    #[test]
+    fn ptt_release_while_idle_defers_as_pending_stop() {
+        assert_eq!(
+            decide_stop(DictationPhase::Idle, false),
+            StopDecision::PendingStop
+        );
+        assert_eq!(
+            decide_stop(DictationPhase::Listening, false),
+            StopDecision::FinalizeNow
+        );
+        assert_eq!(
+            decide_stop(DictationPhase::Idle, true),
+            StopDecision::Noop
+        );
+        assert_eq!(
+            decide_stop(DictationPhase::Polishing, false),
+            StopDecision::Noop
+        );
+    }
+
+    #[test]
+    fn concurrent_finalize_is_noop_while_finalizing() {
+        assert_eq!(
+            decide_finalize(DictationPhase::Transcribing, true),
+            FinalizeDecision::Noop
+        );
+        assert_eq!(
+            decide_finalize(DictationPhase::Transcribing, false),
+            FinalizeDecision::Proceed
+        );
+        assert_eq!(
+            decide_finalize(DictationPhase::Idle, false),
+            FinalizeDecision::IdleCleanup
+        );
+        assert_eq!(
+            decide_finalize(DictationPhase::Listening, false),
+            FinalizeDecision::IdleCleanup
+        );
     }
 }
