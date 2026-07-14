@@ -15,6 +15,9 @@ pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 /// INT8 ONNX bundle compatible with parakeet-rs ≥ 0.3.6.
 pub const DEFAULT_NEMOTRON_MODEL: &str = "nemotron-3.5-asr-streaming-0.6b-int8";
 
+/// Default Qwen3-ASR model pack (duplicated from `qwen_engine::catalog` to avoid circular deps).
+pub const DEFAULT_QWEN_MODEL: &str = "qwen3-asr-0.6b-int4";
+
 /// Whisper model catalog with metadata for all supported models.
 /// Used by both WhisperEngine::discover_models() and discover_models_standalone().
 ///
@@ -38,3 +41,16 @@ pub const WHISPER_MODEL_CATALOG: &[(&str, &str, u32, &str, &str, &str)] = &[
     ("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 547, "High", "Medium", "Quantized large model, best balance"),
     ("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1031, "High", "Slow", "Quantized large model, high accuracy"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_qwen_model_matches_catalog() {
+        assert_eq!(
+            crate::qwen_engine::catalog::DEFAULT_QWEN_MODEL,
+            DEFAULT_QWEN_MODEL
+        );
+    }
+}
