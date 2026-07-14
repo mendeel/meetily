@@ -30,7 +30,7 @@ pub struct TimestampedResult {
 #[derive(thiserror::Error, Debug)]
 pub enum ParakeetError {
     #[error("ORT error")]
-    Ort(#[from] ort::Error),
+    Ort(ort::Error),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("ndarray shape error")]
@@ -41,6 +41,15 @@ pub enum ParakeetError {
     OutputNotFound(String),
     #[error("Failed to get tensor shape for input: {0}")]
     TensorShape(String),
+}
+
+impl<R> From<ort::Error<R>> for ParakeetError
+where
+    ort::Error<R>: Into<ort::Error<()>>,
+{
+    fn from(e: ort::Error<R>) -> Self {
+        ParakeetError::Ort(e.into())
+    }
 }
 
 pub struct ParakeetModel {
@@ -125,12 +134,12 @@ impl ParakeetModel {
 
         let session = builder.commit_from_file(model_dir.as_ref().join(&model_filename))?;
 
-        for input in &session.inputs {
+        for input in session.inputs() {
             log::info!(
                 "Parakeet Model '{}' input: name={}, type={:?}",
                 model_filename,
-                input.name,
-                input.input_type
+                input.name(),
+                input.dtype()
             );
         }
 
@@ -227,21 +236,21 @@ impl ParakeetModel {
 
     pub fn create_decoder_state(&self) -> Result<DecoderState, ParakeetError> {
         // Get input shapes from decoder model
-        let inputs = &self.decoder_joint.inputs;
+        let inputs = self.decoder_joint.inputs();
 
         let state1_shape = inputs
             .iter()
-            .find(|input| input.name == "input_states_1")
+            .find(|input| input.name() == "input_states_1")
             .ok_or_else(|| ParakeetError::InputNotFound("input_states_1".to_string()))?
-            .input_type
+            .dtype()
             .tensor_shape()
             .ok_or_else(|| ParakeetError::TensorShape("input_states_1".to_string()))?;
 
         let state2_shape = inputs
             .iter()
-            .find(|input| input.name == "input_states_2")
+            .find(|input| input.name() == "input_states_2")
             .ok_or_else(|| ParakeetError::InputNotFound("input_states_2".to_string()))?
-            .input_type
+            .dtype()
             .tensor_shape()
             .ok_or_else(|| ParakeetError::TensorShape("input_states_2".to_string()))?;
 

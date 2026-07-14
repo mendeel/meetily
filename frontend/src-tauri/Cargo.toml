@@ -100,11 +100,12 @@ nnnoiseless = "0.5"
 # NOTE: whisper-rs is declared in platform-specific sections below (macOS/Windows/Linux)
 # to ensure correct GPU features are enabled per platform
 futures-util = "0.3"
-silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", package = "silero" }
+silero_rs = { path = "vendor/silero", package = "silero" }
 
-# Parakeet (ONNX-based fast transcription) dependencies
-ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
-thiserror = "2.0.16"                # Error handling for Parakeet
+# Parakeet / Nemotron (ONNX-based fast transcription) dependencies
+ort = { version = "2.0.0-rc.12" }  # ONNX Runtime for Parakeet + Nemotron models
+parakeet-rs = "0.3.6"               # Nemotron ASR streaming via ONNX
+thiserror = "2.0.16"                # Error handling for Parakeet / Nemotron
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
@@ -130,7 +131,7 @@ sysinfo = "0.32"
 lazy_static = { version = "1.4.0" }
 realfft = "3.4.0"
 regex = "1.11.0"
-ndarray = "0.16"
+ndarray = "0.17"
 bytes = { version = "1.9.0", features = ["serde"] }
 
 esaxx-rs = "0.1.10"
