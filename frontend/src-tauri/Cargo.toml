@@ -128,6 +128,9 @@ dirs = "5.0.1"
 # Additional dependencies for notification system
 url = "2.5.0"
 
+# Dictation: clipboard copy for text injection / paste fallback
+arboard = "3"
+
 
 # System monitoring for resource management
 sysinfo = "0.32"
