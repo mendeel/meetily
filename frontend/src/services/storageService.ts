@@ -24,6 +24,8 @@ export interface Meeting {
   [key: string]: any; // Allow additional properties from backend
 }
 
+export type SpeakerAliases = Record<string, string>;
+
 /**
  * Storage Service
  * Singleton service for managing meeting storage operations
@@ -63,6 +65,29 @@ export class StorageService {
    */
   async getMeetings(): Promise<Meeting[]> {
     return invoke<Meeting[]>('api_get_meetings');
+  }
+
+  /**
+   * Set or clear a speaker display-name alias for a meeting.
+   * Empty displayName removes the alias.
+   */
+  async setSpeakerAlias(
+    meetingId: string,
+    speakerId: string,
+    displayName: string
+  ): Promise<SpeakerAliases> {
+    return invoke<SpeakerAliases>('api_set_speaker_alias', {
+      meetingId,
+      speakerId,
+      displayName,
+    });
+  }
+
+  /**
+   * Distinct speaker IDs present in a meeting's transcripts.
+   */
+  async getMeetingSpeakers(meetingId: string): Promise<string[]> {
+    return invoke<string[]>('api_get_meeting_speakers', { meetingId });
   }
 }
 

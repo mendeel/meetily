@@ -12,7 +12,7 @@ import {
   readMeetingSummaryLanguage,
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
-import { formatTranscriptExportLine } from '@/lib/speakerLabels';
+import { formatTranscriptExportLine, SpeakerAliases } from '@/lib/speakerLabels';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -61,6 +61,7 @@ interface UseSummaryGenerationProps {
   updateMeetingTitle: (title: string) => void;
   setAiSummary: (summary: Summary | null) => void;
   onOpenModelSettings?: () => void;
+  speakerAliases?: SpeakerAliases | null;
 }
 
 export function useSummaryGeneration({
@@ -73,6 +74,7 @@ export function useSummaryGeneration({
   updateMeetingTitle,
   setAiSummary,
   onOpenModelSettings,
+  speakerAliases,
 }: UseSummaryGenerationProps) {
   const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>('idle');
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -458,12 +460,13 @@ export function useSummaryGeneration({
             timeLabel: formatTime(t.audio_start_time, t.timestamp),
             text: t.text,
             showSpeaker,
+            aliases: speakerAliases,
           })
         )
         .join('\n'),
       transcriptTexts: allTranscripts.map(t => t.text),
     };
-  }, []);
+  }, [speakerAliases]);
 
   // Public API: Generate summary from transcripts
   const handleGenerateSummary = useCallback(async (customPrompt: string = '') => {

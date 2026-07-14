@@ -4,7 +4,7 @@ import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummary
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
-import { formatTranscriptExportLine } from '@/lib/speakerLabels';
+import { formatTranscriptExportLine, SpeakerAliases } from '@/lib/speakerLabels';
 
 interface UseCopyOperationsProps {
   meeting: any;
@@ -12,6 +12,7 @@ interface UseCopyOperationsProps {
   meetingTitle: string;
   aiSummary: Summary | null;
   blockNoteSummaryRef: RefObject<BlockNoteSummaryViewRef>;
+  speakerAliases?: SpeakerAliases | null;
 }
 
 export function useCopyOperations({
@@ -20,6 +21,7 @@ export function useCopyOperations({
   meetingTitle,
   aiSummary,
   blockNoteSummaryRef,
+  speakerAliases,
 }: UseCopyOperationsProps) {
 
   // Helper function to fetch ALL transcripts for copying (not just paginated data)
@@ -97,6 +99,7 @@ export function useCopyOperations({
           timeLabel: formatTime(t.audio_start_time, t.timestamp),
           text: t.text,
           showSpeaker,
+          aliases: speakerAliases,
         }) + '  '
       )
       .join('\n');
@@ -114,7 +117,7 @@ export function useCopyOperations({
       transcript_length: allTranscripts.length.toString(),
       word_count: wordCount.toString()
     });
-  }, [meeting, meetingTitle, fetchAllTranscripts]);
+  }, [meeting, meetingTitle, fetchAllTranscripts, speakerAliases]);
 
   // Copy summary to clipboard
   const handleCopySummary = useCallback(async () => {

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Summary, SummaryResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { ModelConfig } from '@/components/ModelSettingsModal';
+import { SpeakerAliases } from '@/lib/speakerLabels';
+import { storageService } from '@/services/storageService';
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -57,6 +59,14 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isRecording] = useState(false);
   const [summaryResponse] = useState<SummaryResponse | null>(null);
+  const [speakerAliases, setSpeakerAliases] = useState<SpeakerAliases>(
+    () => meeting.speaker_aliases ?? {}
+  );
+
+  // Keep aliases in sync when meeting metadata reloads
+  useEffect(() => {
+    setSpeakerAliases(meeting.speaker_aliases ?? {});
+  }, [meeting.id, meeting.speaker_aliases]);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -86,6 +96,23 @@ export default function PageContent({
       console.warn('⚠️ Modal open function not yet registered');
     }
   };
+
+  const handleSpeakerAliasChange = useCallback(
+    async (speakerId: string, displayName: string) => {
+      try {
+        const updated = await storageService.setSpeakerAlias(
+          meeting.id,
+          speakerId,
+          displayName
+        );
+        setSpeakerAliases(updated);
+      } catch (error) {
+        console.error('Failed to set speaker alias:', error);
+        toast.error('Failed to rename speaker');
+      }
+    },
+    [meeting.id]
+  );
 
   // Save model config to backend database and sync via event
   const handleSaveModelConfig = async (config?: ModelConfig) => {
@@ -120,6 +147,7 @@ export default function PageContent({
     updateMeetingTitle: meetingData.updateMeetingTitle,
     setAiSummary: meetingData.setAiSummary,
     onOpenModelSettings: handleOpenModelSettings,
+    speakerAliases,
   });
 
   const copyOperations = useCopyOperations({
@@ -128,6 +156,7 @@ export default function PageContent({
     meetingTitle: meetingData.meetingTitle,
     aiSummary: meetingData.aiSummary,
     blockNoteSummaryRef: meetingData.blockNoteSummaryRef,
+    speakerAliases,
   });
 
   const meetingOperations = useMeetingOperations({
@@ -191,6 +220,9 @@ export default function PageContent({
           meetingId={meeting.id}
           meetingFolderPath={meeting.folder_path}
           onRefetchTranscripts={onRefetchTranscripts}
+          speakerAliases={speakerAliases}
+          onSpeakerAliasesChange={setSpeakerAliases}
+          onSpeakerAliasChange={handleSpeakerAliasChange}
         />
         <SummaryPanel
           meeting={meeting}

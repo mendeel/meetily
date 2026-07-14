@@ -3,8 +3,10 @@
 import { Transcript, TranscriptSegmentData } from '@/types';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
+import { SpeakersPanel } from './SpeakersPanel';
 import { useMemo } from 'react';
 import { useConfig } from '@/contexts/ConfigContext';
+import { SpeakerAliases } from '@/lib/speakerLabels';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -28,6 +30,11 @@ interface TranscriptPanelProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+
+  // Speaker rename (meeting details)
+  speakerAliases?: SpeakerAliases;
+  onSpeakerAliasesChange?: (aliases: SpeakerAliases) => void;
+  onSpeakerAliasChange?: (speakerId: string, displayName: string) => void | Promise<void>;
 }
 
 export function TranscriptPanel({
@@ -48,6 +55,9 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  speakerAliases,
+  onSpeakerAliasesChange,
+  onSpeakerAliasChange,
 }: TranscriptPanelProps) {
   const { showSpeakerLabels, showConfidenceIndicator } = useConfig();
 
@@ -70,10 +80,12 @@ export function TranscriptPanel({
     }));
   }, [transcripts, usePagination, segments]);
 
+  const canEditSpeakers = Boolean(meetingId && onSpeakerAliasChange && !isRecording);
+
   return (
     <div className="hidden md:flex md:w-1/4 lg:w-1/3 min-w-0 border-r border-gray-200 bg-white flex-col relative shrink-0">
       {/* Title area */}
-      <div className="p-4 border-b border-gray-200">
+      <div className="p-4 border-b border-gray-200 space-y-2">
         <TranscriptButtonGroup
           transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
           onCopyTranscript={onCopyTranscript}
@@ -82,6 +94,13 @@ export function TranscriptPanel({
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
         />
+        {canEditSpeakers && meetingId && onSpeakerAliasesChange && (
+          <SpeakersPanel
+            meetingId={meetingId}
+            aliases={speakerAliases ?? {}}
+            onAliasesChange={onSpeakerAliasesChange}
+          />
+        )}
       </div>
 
       {/* Transcript content - use virtualized view for better performance */}
@@ -96,6 +115,9 @@ export function TranscriptPanel({
           showConfidence={showConfidenceIndicator}
           showSpeakerLabels={showSpeakerLabels}
           disableAutoScroll={disableAutoScroll}
+          speakerAliases={speakerAliases}
+          editableSpeakers={canEditSpeakers}
+          onSpeakerAliasChange={onSpeakerAliasChange}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           totalCount={totalCount}

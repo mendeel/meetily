@@ -106,6 +106,8 @@ export interface MeetingMetadata {
   created_at: string;
   updated_at: string;
   folder_path?: string;
+  /** Speaker id → display name aliases for this meeting */
+  speaker_aliases?: Record<string, string>;
 }
 
 export interface PaginatedTranscriptsResponse {

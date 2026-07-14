@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useReducer, startTransition, useEffect, memo } from "react";
+import { useRef, useReducer, startTransition, useEffect, memo, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
-import { formatSpeakerLabel, isLocalSpeaker } from "@/lib/speakerLabels";
+import { formatSpeakerLabel, isLocalSpeaker, SpeakerAliases } from "@/lib/speakerLabels";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -30,6 +30,12 @@ export interface VirtualizedTranscriptViewProps {
     showSpeakerLabels?: boolean;
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
+    /** Meeting-level speaker aliases for display */
+    speakerAliases?: SpeakerAliases | null;
+    /** Enable click-to-edit speaker labels (meeting details only) */
+    editableSpeakers?: boolean;
+    /** Persist a speaker rename; empty name clears the alias */
+    onSpeakerAliasChange?: (speakerId: string, displayName: string) => void | Promise<void>;
 
     // Pagination props (infinite scroll)
     hasMore?: boolean;
@@ -77,6 +83,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     isStreaming,
     showConfidence,
     showSpeakerLabels,
+    speakerAliases,
+    editableSpeakers,
+    onSpeakerAliasChange,
 }: {
     id: string;
     timestamp: number;
@@ -87,24 +96,84 @@ const TranscriptSegment = memo(function TranscriptSegment({
     isStreaming: boolean;
     showConfidence: boolean;
     showSpeakerLabels: boolean;
+    speakerAliases?: SpeakerAliases | null;
+    editableSpeakers?: boolean;
+    onSpeakerAliasChange?: (speakerId: string, displayName: string) => void | Promise<void>;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
-    const speakerLabel = showSpeakerLabels ? formatSpeakerLabel(speaker) : null;
+    const speakerLabel = showSpeakerLabels ? formatSpeakerLabel(speaker, speakerAliases) : null;
     const isYou = isLocalSpeaker(speaker);
     const showAsLive = isStreaming || !!isPartial;
+    const [isEditing, setIsEditing] = useState(false);
+    const [draft, setDraft] = useState('');
+
+    const beginEdit = () => {
+        if (!editableSpeakers || !speaker || !onSpeakerAliasChange) return;
+        setDraft(speakerLabel ?? speaker);
+        setIsEditing(true);
+    };
+
+    const commitEdit = async () => {
+        if (!speaker || !onSpeakerAliasChange) {
+            setIsEditing(false);
+            return;
+        }
+        const next = draft.trim();
+        const currentDisplay = formatSpeakerLabel(speaker, speakerAliases) ?? speaker;
+        const defaultLabel = formatSpeakerLabel(speaker) ?? speaker;
+
+        if (next === currentDisplay) {
+            setIsEditing(false);
+            return;
+        }
+
+        // Empty or matching the default label clears the alias
+        const displayName =
+            !next || next.toLowerCase() === defaultLabel.toLowerCase() ? '' : next;
+        await onSpeakerAliasChange(speaker, displayName);
+        setIsEditing(false);
+    };
 
     return (
         <div id={`segment-${id}`} className="mb-3">
             <div className="flex items-start gap-2">
                 <div className="flex-shrink-0 min-w-[50px] mt-1 flex flex-col items-start gap-0.5">
                     {speakerLabel && (
-                        <span
-                            className={`text-xs font-semibold leading-tight ${
-                                isYou ? 'text-blue-600' : 'text-teal-700'
-                            }`}
-                        >
-                            {speakerLabel}
-                        </span>
+                        isEditing ? (
+                            <input
+                                autoFocus
+                                className="text-xs font-semibold w-[88px] border border-blue-200 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                value={draft}
+                                onChange={e => setDraft(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        commitEdit();
+                                    } else if (e.key === 'Escape') {
+                                        setIsEditing(false);
+                                    }
+                                }}
+                                onBlur={() => { void commitEdit(); }}
+                            />
+                        ) : (
+                            <span
+                                className={`text-xs font-semibold leading-tight ${
+                                    isYou ? 'text-blue-600' : 'text-teal-700'
+                                } ${editableSpeakers ? 'cursor-pointer hover:underline' : ''}`}
+                                title={editableSpeakers ? 'Click to rename' : undefined}
+                                onClick={beginEdit}
+                                role={editableSpeakers ? 'button' : undefined}
+                                tabIndex={editableSpeakers ? 0 : undefined}
+                                onKeyDown={editableSpeakers ? (e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        beginEdit();
+                                    }
+                                } : undefined}
+                            >
+                                {speakerLabel}
+                            </span>
+                        )
                     )}
                     <Tooltip>
                         <TooltipTrigger>
@@ -154,6 +223,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     showConfidence = true,
     showSpeakerLabels = true,
     disableAutoScroll = false,
+    speakerAliases = null,
+    editableSpeakers = false,
+    onSpeakerAliasChange,
     hasMore = false,
     isLoadingMore = false,
     totalCount = 0,
@@ -274,6 +346,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 isStreaming={isStreaming && !segment.is_partial}
                 showConfidence={showConfidence}
                 showSpeakerLabels={showSpeakerLabels}
+                speakerAliases={speakerAliases}
+                editableSpeakers={editableSpeakers}
+                onSpeakerAliasChange={onSpeakerAliasChange}
             />
         );
     };
