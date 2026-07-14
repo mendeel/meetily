@@ -49,6 +49,7 @@ pub mod anthropic;
 pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod nemotron_engine;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -471,6 +472,16 @@ pub fn run() {
                 }
             });
 
+            // Set Nemotron models directory
+            nemotron_engine::commands::set_models_directory(&_app.handle());
+
+            // Initialize Nemotron engine on startup
+            tauri::async_runtime::spawn(async {
+                if let Err(e) = nemotron_engine::commands::nemotron_init().await {
+                    log::error!("Failed to initialize Nemotron engine on startup: {}", e);
+                }
+            });
+
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -582,6 +593,21 @@ pub fn run() {
             parakeet_engine::commands::parakeet_cancel_download,
             parakeet_engine::commands::parakeet_delete_corrupted_model,
             parakeet_engine::commands::open_parakeet_models_folder,
+            // Nemotron engine commands
+            nemotron_engine::commands::nemotron_init,
+            nemotron_engine::commands::nemotron_get_available_models,
+            nemotron_engine::commands::nemotron_load_model,
+            nemotron_engine::commands::nemotron_get_current_model,
+            nemotron_engine::commands::nemotron_is_model_loaded,
+            nemotron_engine::commands::nemotron_has_available_models,
+            nemotron_engine::commands::nemotron_validate_model_ready,
+            nemotron_engine::commands::nemotron_transcribe_audio,
+            nemotron_engine::commands::nemotron_get_models_directory,
+            nemotron_engine::commands::nemotron_download_model,
+            nemotron_engine::commands::nemotron_retry_download,
+            nemotron_engine::commands::nemotron_cancel_download,
+            nemotron_engine::commands::nemotron_delete_corrupted_model,
+            nemotron_engine::commands::open_nemotron_models_folder,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,
