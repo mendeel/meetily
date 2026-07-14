@@ -53,5 +53,4 @@ pnpm run build
 
 echo "Building Tauri app..."
 pnpm run tauri build
-sleep
 
