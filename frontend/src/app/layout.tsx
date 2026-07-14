@@ -9,6 +9,7 @@ import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
+import { usePathname } from 'next/navigation'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -68,6 +69,9 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const pathname = usePathname()
+  const isDictationPill = pathname === '/dictation-pill'
+
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
 
@@ -228,6 +232,19 @@ export default function RootLayout({
     setOnboardingCompleted(true)
     // Optionally reload the window to ensure all state is fresh
     window.location.reload()
+  }
+
+  // Minimal chrome for the always-on-top dictation pill window
+  if (isDictationPill) {
+    return (
+      <html lang="en" className="bg-transparent">
+        <body
+          className={`${sourceSans3.variable} overflow-hidden bg-transparent font-sans antialiased`}
+        >
+          {children}
+        </body>
+      </html>
+    )
   }
 
   return (

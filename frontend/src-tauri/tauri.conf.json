@@ -19,6 +19,20 @@
                 "fullscreen": false,
                 "theme": "Light",
                 "decorations": true
+            },
+            {
+                "label": "dictation-pill",
+                "title": "Dictation",
+                "url": "/dictation-pill",
+                "width": 280,
+                "height": 48,
+                "resizable": false,
+                "decorations": false,
+                "transparent": true,
+                "alwaysOnTop": true,
+                "visible": false,
+                "focus": false,
+                "skipTaskbar": true
             }
         ],
         "macOSPrivateApi": true,
@@ -73,6 +87,18 @@
                                 }
                             ]
                         }
+                    ]
+                },
+                {
+                    "identifier": "dictation-pill",
+                    "description": "Floating dictation pill HUD — event listen and window show/hide",
+                    "windows": [
+                        "dictation-pill"
+                    ],
+                    "permissions": [
+                        "core:event:default",
+                        "core:window:default",
+                        "core:app:default"
                     ]
                 }
             ]
