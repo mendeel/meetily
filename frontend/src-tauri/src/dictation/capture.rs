@@ -9,6 +9,10 @@ pub struct MicCapture {
     sample_rate: u32,
 }
 
+// SAFETY: `cpal::Stream` is !Send, but we only create/stop/drop `MicCapture` while holding
+// the dictation runtime mutex and never share the stream across threads concurrently.
+unsafe impl Send for MicCapture {}
+
 impl MicCapture {
     pub fn start_default_input() -> Result<Self> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

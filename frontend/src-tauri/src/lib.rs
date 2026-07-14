@@ -617,6 +617,13 @@ pub fn run() {
             nemotron_engine::commands::nemotron_cancel_download,
             nemotron_engine::commands::nemotron_delete_corrupted_model,
             nemotron_engine::commands::open_nemotron_models_folder,
+            // Dictation orchestration
+            dictation::commands::dictation_get_config,
+            dictation::commands::dictation_set_config,
+            dictation::commands::dictation_start,
+            dictation::commands::dictation_stop,
+            dictation::commands::dictation_accessibility_status,
+            dictation::commands::dictation_open_accessibility_settings,
             // Diarization commands (system-audio speaker labels)
             audio::diarization::commands::diarization_init,
             audio::diarization::commands::diarization_status,
