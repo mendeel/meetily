@@ -131,7 +131,9 @@ fn show_pill_for_session<R: Runtime>(app: &AppHandle<R>) -> u64 {
         rt.pill_generation = rt.pill_generation.wrapping_add(1);
         rt.pill_generation
     };
-    let _ = show_pill(app);
+    if let Err(e) = show_pill(app) {
+        log::warn!("dictation pill show failed: {e}");
+    }
     generation
 }
 
@@ -166,7 +168,58 @@ fn is_silent(samples: &[f32]) -> bool {
     rms < 0.005
 }
 
+/// Which engine's init + validate_model_ready path dictation must run before STT.
+/// Meeting recording already does this; dictation previously skipped it and failed
+/// with "No Nemotron model loaded" on hotkey stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptionPreparation {
+    Nemotron,
+    Parakeet,
+    Whisper,
+}
+
+fn transcription_preparation(engine: &str) -> TranscriptionPreparation {
+    match engine {
+        "nemotron" => TranscriptionPreparation::Nemotron,
+        "parakeet" => TranscriptionPreparation::Parakeet,
+        "whisper" => TranscriptionPreparation::Whisper,
+        other => panic!("unsupported dictation STT engine: {other}"),
+    }
+}
+
+/// Ensure the selected STT engine is initialized and has a model loaded.
+/// Uses the same validate_model_ready helpers as meeting recording (auto-load first available).
+async fn ensure_stt_ready(prep: TranscriptionPreparation) -> Result<(), String> {
+    match prep {
+        TranscriptionPreparation::Nemotron => {
+            crate::nemotron_engine::commands::nemotron_init().await?;
+            crate::nemotron_engine::commands::nemotron_validate_model_ready()
+                .await
+                .map(|_| ())
+        }
+        TranscriptionPreparation::Parakeet => {
+            crate::parakeet_engine::commands::parakeet_init().await?;
+            crate::parakeet_engine::commands::parakeet_validate_model_ready()
+                .await
+                .map(|_| ())
+        }
+        TranscriptionPreparation::Whisper => {
+            crate::whisper_engine::commands::whisper_init().await?;
+            crate::whisper_engine::commands::whisper_validate_model_ready()
+                .await
+                .map(|_| ())
+        }
+    }
+}
+
 async fn transcribe_samples(engine: &str, samples: Vec<f32>) -> Result<String, String> {
+    match engine {
+        "nemotron" | "parakeet" | "whisper" => {
+            ensure_stt_ready(transcription_preparation(engine)).await?;
+        }
+        other => return Err(format!("unsupported dictation STT engine: {other}")),
+    }
+
     match engine {
         "nemotron" => {
             crate::nemotron_engine::commands::nemotron_transcribe_audio(samples).await
@@ -674,5 +727,30 @@ pub async fn dictation_open_accessibility_settings() -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         Err("Accessibility settings are only available on macOS".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nemotron_dictation_requires_model_preparation() {
+        assert_eq!(
+            transcription_preparation("nemotron"),
+            TranscriptionPreparation::Nemotron
+        );
+    }
+
+    #[test]
+    fn parakeet_and_whisper_map_to_their_preparation_paths() {
+        assert_eq!(
+            transcription_preparation("parakeet"),
+            TranscriptionPreparation::Parakeet
+        );
+        assert_eq!(
+            transcription_preparation("whisper"),
+            TranscriptionPreparation::Whisper
+        );
     }
 }
