@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager, Runtime};
 pub enum TranscriptionEngine {
     Whisper(Arc<crate::whisper_engine::WhisperEngine>),  // Direct access (backward compat)
     Parakeet(Arc<crate::parakeet_engine::ParakeetEngine>), // Direct access (backward compat)
+    Nemotron(Arc<crate::nemotron_engine::NemotronEngine>), // Direct access (backward compat)
     Provider(Arc<dyn TranscriptionProvider>),  // Trait-based (preferred for new code)
 }
 
@@ -24,6 +25,7 @@ impl TranscriptionEngine {
         match self {
             Self::Whisper(engine) => engine.is_model_loaded().await,
             Self::Parakeet(engine) => engine.is_model_loaded().await,
+            Self::Nemotron(engine) => engine.is_model_loaded().await,
             Self::Provider(provider) => provider.is_model_loaded().await,
         }
     }
@@ -33,6 +35,7 @@ impl TranscriptionEngine {
         match self {
             Self::Whisper(engine) => engine.get_current_model().await,
             Self::Parakeet(engine) => engine.get_current_model().await,
+            Self::Nemotron(engine) => engine.get_current_model().await,
             Self::Provider(provider) => provider.get_current_model().await,
         }
     }
@@ -42,6 +45,7 @@ impl TranscriptionEngine {
         match self {
             Self::Whisper(_) => "Whisper (direct)",
             Self::Parakeet(_) => "Parakeet (direct)",
+            Self::Nemotron(_) => "Nemotron (direct)",
             Self::Provider(provider) => provider.provider_name(),
         }
     }
@@ -135,10 +139,33 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 }
             }
         }
+        "nemotron" => {
+            info!("🔍 Validating Nemotron model...");
+            if let Err(init_error) = crate::nemotron_engine::commands::nemotron_init().await {
+                warn!("❌ Failed to initialize Nemotron engine: {}", init_error);
+                return Err(format!(
+                    "Failed to initialize Nemotron speech recognition: {}",
+                    init_error
+                ));
+            }
+
+            match crate::nemotron_engine::commands::nemotron_validate_model_ready_with_config(app)
+                .await
+            {
+                Ok(model_name) => {
+                    info!("✅ Nemotron model validation successful: {} is ready", model_name);
+                    Ok(())
+                }
+                Err(e) => {
+                    warn!("❌ Nemotron model validation failed: {}", e);
+                    Err(e)
+                }
+            }
+        }
         other => {
             warn!("❌ Unsupported transcription provider for local recording: {}", other);
             Err(format!(
-                "Provider '{}' is not supported for local transcription. Please select 'localWhisper' or 'parakeet'.",
+                "Provider '{}' is not supported for local transcription. Please select 'localWhisper', 'parakeet', or 'nemotron'.",
                 other
             ))
         }
@@ -210,6 +237,35 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                 None => {
                     Err("Parakeet engine not initialized. This should not happen after validation.".to_string())
                 }
+            }
+        }
+        "nemotron" => {
+            info!("🎙️ Initializing Nemotron transcription engine");
+
+            let engine = {
+                let guard = crate::nemotron_engine::commands::NEMOTRON_ENGINE
+                    .lock()
+                    .unwrap();
+                guard.as_ref().cloned()
+            };
+
+            match engine {
+                Some(engine) => {
+                    if engine.is_model_loaded().await {
+                        let model_name = engine
+                            .get_current_model()
+                            .await
+                            .unwrap_or_else(|| "unknown".to_string());
+                        info!("✅ Nemotron model '{}' already loaded", model_name);
+                        Ok(TranscriptionEngine::Nemotron(engine))
+                    } else {
+                        Err("Nemotron engine initialized but no model loaded. This should not happen after validation.".to_string())
+                    }
+                }
+                None => Err(
+                    "Nemotron engine not initialized. This should not happen after validation."
+                        .to_string(),
+                ),
             }
         }
         "localWhisper" | _ => {

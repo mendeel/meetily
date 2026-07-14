@@ -81,6 +81,7 @@ pub fn start_transcription_task<R: Runtime>(
             let engine_clone = match &transcription_engine {
                 TranscriptionEngine::Whisper(e) => TranscriptionEngine::Whisper(e.clone()),
                 TranscriptionEngine::Parakeet(e) => TranscriptionEngine::Parakeet(e.clone()),
+                TranscriptionEngine::Nemotron(e) => TranscriptionEngine::Nemotron(e.clone()),
                 TranscriptionEngine::Provider(p) => TranscriptionEngine::Provider(p.clone()),
             };
             let app_clone = app.clone();
@@ -155,7 +156,7 @@ pub fn start_transcription_task<R: Runtime>(
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
                                         TranscriptionEngine::Whisper(_) | TranscriptionEngine::Provider(_) => 0.3,
-                                        TranscriptionEngine::Parakeet(_) => 0.0, // Parakeet has no confidence, accept all
+                                        TranscriptionEngine::Parakeet(_) | TranscriptionEngine::Nemotron(_) => 0.0, // No confidence — accept all
                                     };
 
                                     let confidence_str = match confidence_opt {
@@ -504,6 +505,77 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                 Err(e) => {
                     error!(
                         "Parakeet transcription failed for chunk {}: {}",
+                        chunk.chunk_id, e
+                    );
+
+                    let transcription_error = TranscriptionError::EngineFailed(e.to_string());
+                    let _ = app.emit(
+                        "transcription-error",
+                        &serde_json::json!({
+                            "error": transcription_error.to_string(),
+                            "userMessage": format!("Transcription failed: {}", transcription_error),
+                            "actionable": false
+                        }),
+                    );
+
+                    Err(transcription_error)
+                }
+            }
+        }
+        TranscriptionEngine::Nemotron(nemotron_engine) => {
+            let language = crate::get_language_preference_internal();
+            let chunk_id = chunk.chunk_id;
+            let chunk_timestamp = chunk.timestamp;
+            let chunk_duration = speech_samples.len() as f64 / 16000.0;
+            let app_for_partial = app.clone();
+
+            // Emit incremental partial updates while streaming 560ms chunks
+            let on_partial = move |partial: &str| {
+                let cleaned = partial.trim();
+                if cleaned.is_empty() {
+                    return;
+                }
+                let update = TranscriptUpdate {
+                    text: cleaned.to_string(),
+                    timestamp: format_current_timestamp(),
+                    source: "Audio".to_string(),
+                    sequence_id: 0, // Partial — recording manager can ignore or replace
+                    chunk_start_time: chunk_timestamp,
+                    is_partial: true,
+                    confidence: 0.85,
+                    audio_start_time: chunk_timestamp,
+                    audio_end_time: chunk_timestamp + chunk_duration,
+                    duration: chunk_duration,
+                };
+                if let Err(e) = app_for_partial.emit("transcript-update", &update) {
+                    log::warn!(
+                        "Failed to emit Nemotron partial transcript for chunk {}: {}",
+                        chunk_id,
+                        e
+                    );
+                }
+            };
+
+            match nemotron_engine
+                .transcribe_utterance(speech_samples, language.as_deref(), Some(on_partial))
+                .await
+            {
+                Ok(text) => {
+                    let cleaned_text = text.trim().to_string();
+                    if cleaned_text.is_empty() {
+                        return Ok((String::new(), None, false));
+                    }
+
+                    info!(
+                        "Nemotron transcription complete for chunk {}: '{}'",
+                        chunk.chunk_id, cleaned_text
+                    );
+
+                    Ok((cleaned_text, None, false))
+                }
+                Err(e) => {
+                    error!(
+                        "Nemotron transcription failed for chunk {}: {}",
                         chunk.chunk_id, e
                     );
 
