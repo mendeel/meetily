@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, FlaskConical } from 'lucide-react';
+import { ArrowLeft, Settings2, Mic, Mic2, Database as DatabaseIcon, SparkleIcon, FlaskConical } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
@@ -9,6 +9,7 @@ import { TranscriptSettings } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
+import { DictationSettings } from '@/components/DictationSettings';
 import { BetaSettings } from '@/components/BetaSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -17,6 +18,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 const TABS = [
   { value: 'general', label: 'General', icon: Settings2 },
   { value: 'recording', label: 'Recordings', icon: Mic },
+  { value: 'dictation', label: 'Dictation', icon: Mic2 },
   { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
   { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
   { value: 'beta', label: 'Beta', icon: FlaskConical }
@@ -114,6 +116,9 @@ export default function SettingsPage() {
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />
+            </TabsContent>
+            <TabsContent value="dictation">
+              <DictationSettings />
             </TabsContent>
             <TabsContent value="Transcriptionmodels">
               <TranscriptSettings
