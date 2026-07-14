@@ -2,13 +2,14 @@ use std::str::FromStr;
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use super::commands::{dictation_start, dictation_stop, lock_runtime};
+use super::commands::{
+    dictation_start_inner, dictation_stop_inner, emit_dictation_error, lock_runtime,
+};
 use super::config::{self, DictationConfig};
 use super::session::TriggerMode;
-use crate::state::AppState;
 
 /// Shortcuts currently registered with the OS (for clean re-registration).
 static REGISTERED: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
@@ -45,7 +46,7 @@ pub fn reregister<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     }
 
     let shortcut_str = active_shortcut_string(&config);
-        app.global_shortcut()
+    app.global_shortcut()
         .register(shortcut_str.as_str())
         .map_err(|e| format!("Failed to register dictation shortcut '{shortcut_str}': {e}"))?;
 
@@ -125,12 +126,10 @@ fn handle_shortcut_event<R: Runtime>(
 fn spawn_start<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let Some(state) = app.try_state::<AppState>() else {
-            log::warn!("dictation hotkey start: AppState not ready");
-            return;
-        };
-        if let Err(e) = dictation_start(app.clone(), state).await {
+        // Listening does not require AppState (DB); only finalize polish does.
+        if let Err(e) = dictation_start_inner(&app).await {
             log::warn!("dictation_start from hotkey: {e}");
+            emit_dictation_error(&app, &e);
         }
     });
 }
@@ -138,12 +137,9 @@ fn spawn_start<R: Runtime>(app: &AppHandle<R>) {
 fn spawn_stop<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let Some(state) = app.try_state::<AppState>() else {
-            log::warn!("dictation hotkey stop: AppState not ready");
-            return;
-        };
-        if let Err(e) = dictation_stop(app.clone(), state).await {
+        if let Err(e) = dictation_stop_inner(&app).await {
             log::warn!("dictation_stop from hotkey: {e}");
+            emit_dictation_error(&app, &e);
         }
     });
 }

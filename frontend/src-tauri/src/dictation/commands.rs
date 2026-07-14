@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 
 use super::capture::MicCapture;
@@ -72,7 +72,7 @@ fn phase_name(phase: DictationPhase) -> &'static str {
     }
 }
 
-fn emit_phase<R: Runtime>(
+pub(crate) fn emit_phase<R: Runtime>(
     app: &AppHandle<R>,
     phase: DictationPhase,
     app_name: Option<&str>,
@@ -86,6 +86,13 @@ fn emit_phase<R: Runtime>(
             message: message.map(|s| s.to_string()),
         },
     );
+}
+
+/// Surface a dictation error to the UI (pill + phase event). Used by hotkeys when
+/// start/stop cannot proceed.
+pub(crate) fn emit_dictation_error<R: Runtime>(app: &AppHandle<R>, message: &str) {
+    let _ = show_pill(app);
+    emit_phase(app, DictationPhase::Error, None, Some(message));
 }
 
 fn is_silent(samples: &[f32]) -> bool {
@@ -113,10 +120,14 @@ async fn transcribe_samples(engine: &str, samples: Vec<f32>) -> Result<String, S
 
 async fn polish_with_llm<R: Runtime>(
     app: &AppHandle<R>,
-    state: &AppState,
+    state: Option<&AppState>,
     profile: PolishProfile,
     cleaned: &str,
 ) -> String {
+    let Some(state) = state else {
+        // AppState (DB) may be absent on first launch — skip polish, keep cleaned text.
+        return cleaned.to_string();
+    };
     let pool = state.db_manager.pool();
     let setting = match SettingsRepository::get_model_config(pool).await {
         Ok(Some(s)) => s,
@@ -249,11 +260,8 @@ pub async fn dictation_set_config<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn dictation_start<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+/// Start listening (or toggle-finalize). Does not require AppState — mic + pill only.
+pub async fn dictation_start_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if crate::audio::recording_commands::is_recording().await {
         return Err("Stop meeting recording first".into());
     }
@@ -288,12 +296,13 @@ pub async fn dictation_start<R: Runtime>(
     };
 
     if finalize_toggle {
-        return finalize_dictation(&app, state.inner()).await;
+        let state = app.try_state::<AppState>();
+        return finalize_dictation(app, state.as_deref()).await;
     }
 
-    let _ = show_pill(&app);
+    let _ = show_pill(app);
     emit_phase(
-        &app,
+        app,
         DictationPhase::Listening,
         app_name.as_deref(),
         None,
@@ -301,11 +310,8 @@ pub async fn dictation_start<R: Runtime>(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn dictation_stop<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+/// Stop / PTT release → finalize. AppState is optional (needed only for LLM polish).
+pub async fn dictation_stop_inner<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     {
         let mut rt = lock_runtime();
         let _ = rt.session.on_hotkey_released();
@@ -314,12 +320,23 @@ pub async fn dictation_stop<R: Runtime>(
             rt.session.phase = DictationPhase::Transcribing;
         }
     }
-    finalize_dictation(&app, state.inner()).await
+    let state = app.try_state::<AppState>();
+    finalize_dictation(app, state.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn dictation_start<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    dictation_start_inner(&app).await
+}
+
+#[tauri::command]
+pub async fn dictation_stop<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    dictation_stop_inner(&app).await
 }
 
 async fn finalize_dictation<R: Runtime>(
     app: &AppHandle<R>,
-    state: &AppState,
+    state: Option<&AppState>,
 ) -> Result<(), String> {
     // Stop mic capture synchronously before any `.await` — `MicCapture` / cpal::Stream is !Send.
     let (samples, config, target_app, target_bundle) = {
