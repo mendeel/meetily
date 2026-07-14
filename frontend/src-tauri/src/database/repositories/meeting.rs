@@ -2,7 +2,33 @@ use crate::api::{MeetingDetails, MeetingTranscript};
 use crate::database::models::{MeetingModel, Transcript};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
+use std::collections::HashMap;
 use tracing::{error, info};
+
+/// Parse speaker_aliases JSON text into a string map.
+pub fn parse_speaker_aliases(raw: &Option<String>) -> Option<HashMap<String, String>> {
+    let Some(text) = raw.as_ref() else {
+        return None;
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parsed: HashMap<String, String> = serde_json::from_str(trimmed).ok()?;
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
+}
+
+fn aliases_to_json(aliases: &HashMap<String, String>) -> Option<String> {
+    if aliases.is_empty() {
+        None
+    } else {
+        serde_json::to_string(aliases).ok()
+    }
+}
 
 pub struct MeetingsRepository;
 
@@ -62,7 +88,7 @@ impl MeetingsRepository {
 
         // Get meeting details
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?")
+            sqlx::query_as("SELECT * FROM meetings WHERE id = ?")
                 .bind(meeting_id)
                 .fetch_optional(&mut *transaction)
                 .await?;
@@ -102,6 +128,7 @@ impl MeetingsRepository {
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 transcripts: meeting_transcripts,
+                speaker_aliases: parse_speaker_aliases(&meeting.speaker_aliases),
             }))
         } else {
             transaction.rollback().await?;
@@ -121,12 +148,97 @@ impl MeetingsRepository {
         }
 
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?")
+            sqlx::query_as("SELECT * FROM meetings WHERE id = ?")
                 .bind(meeting_id)
                 .fetch_optional(pool)
                 .await?;
 
         Ok(meeting)
+    }
+
+    /// Distinct speaker IDs present in a meeting's transcripts (for Speakers panel).
+    pub async fn get_meeting_speakers(
+        pool: &SqlitePool,
+        meeting_id: &str,
+    ) -> Result<Vec<String>, SqlxError> {
+        if meeting_id.trim().is_empty() {
+            return Err(SqlxError::Protocol(
+                "meeting_id cannot be empty".to_string(),
+            ));
+        }
+
+        let rows: Vec<(Option<String>,)> = sqlx::query_as(
+            "SELECT DISTINCT speaker FROM transcripts
+             WHERE meeting_id = ? AND speaker IS NOT NULL AND TRIM(speaker) != ''
+             ORDER BY speaker ASC",
+        )
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().filter_map(|(s,)| s).collect())
+    }
+
+    /// Merge or clear a speaker display-name alias. Empty `display_name` removes the key.
+    pub async fn set_speaker_alias(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        speaker_id: &str,
+        display_name: &str,
+    ) -> Result<HashMap<String, String>, SqlxError> {
+        if meeting_id.trim().is_empty() {
+            return Err(SqlxError::Protocol(
+                "meeting_id cannot be empty".to_string(),
+            ));
+        }
+        let speaker_id = speaker_id.trim();
+        if speaker_id.is_empty() {
+            return Err(SqlxError::Protocol(
+                "speaker_id cannot be empty".to_string(),
+            ));
+        }
+
+        let mut conn = pool.acquire().await?;
+        let mut transaction = conn.begin().await?;
+
+        let meeting: Option<MeetingModel> =
+            sqlx::query_as("SELECT * FROM meetings WHERE id = ?")
+                .bind(meeting_id)
+                .fetch_optional(&mut *transaction)
+                .await?;
+
+        let Some(meeting) = meeting else {
+            transaction.rollback().await?;
+            return Err(SqlxError::RowNotFound);
+        };
+
+        let mut aliases = parse_speaker_aliases(&meeting.speaker_aliases).unwrap_or_default();
+        let trimmed_name = display_name.trim();
+        if trimmed_name.is_empty() {
+            aliases.remove(speaker_id);
+        } else {
+            aliases.insert(speaker_id.to_string(), trimmed_name.to_string());
+        }
+
+        let aliases_json = aliases_to_json(&aliases);
+        let now = Utc::now().naive_utc();
+
+        let rows_affected = sqlx::query(
+            "UPDATE meetings SET speaker_aliases = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(aliases_json)
+        .bind(now)
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+
+        if rows_affected.rows_affected() == 0 {
+            transaction.rollback().await?;
+            return Err(SqlxError::RowNotFound);
+        }
+
+        transaction.commit().await?;
+        Ok(aliases)
     }
 
     /// Get meeting transcripts with pagination support

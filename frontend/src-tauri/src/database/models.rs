@@ -9,6 +9,8 @@ pub struct MeetingModel {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub folder_path: Option<String>,
+    /// JSON map of speaker id → display name, e.g. `{"speaker_1":"Alice"}`
+    pub speaker_aliases: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
