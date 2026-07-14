@@ -16,6 +16,10 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  /** Diarization: "you" | "others" | "speaker_1" | … */
+  speaker?: string;
+  /** Audio source: "mic" | "system" */
+  channel?: string;
 }
 
 export interface TranscriptUpdate {
@@ -30,6 +34,16 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  /** Diarization: "you" | "others" | "speaker_1" | … */
+  speaker?: string;
+  /** Audio source: "mic" | "system" */
+  channel?: string;
+}
+
+/** Event payload when neural diarization relabels a segment without rewriting text */
+export interface TranscriptSpeakerUpdate {
+  sequence_id: number;
+  speaker: string;
 }
 
 export interface Block {
@@ -107,4 +121,10 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  /** Diarization: "you" | "others" | "speaker_1" | … */
+  speaker?: string;
+  /** Audio source: "mic" | "system" */
+  channel?: string;
+  is_partial?: boolean;
+  sequence_id?: number;
 }

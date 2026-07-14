@@ -7,7 +7,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { TranscriptUpdate, Transcript } from '@/types';
+import { TranscriptUpdate, Transcript, TranscriptSpeakerUpdate } from '@/types';
 
 export interface TranscriptionStatus {
   chunks_in_queue: number;
@@ -55,6 +55,15 @@ export class TranscriptService {
    */
   async onTranscriptUpdate(callback: (update: TranscriptUpdate) => void): Promise<UnlistenFn> {
     return listen<TranscriptUpdate>('transcript-update', (event) => {
+      callback(event.payload);
+    });
+  }
+
+  /**
+   * Listen for speaker relabel events (neural diarization updates without rewriting text)
+   */
+  async onTranscriptSpeakerUpdate(callback: (update: TranscriptSpeakerUpdate) => void): Promise<UnlistenFn> {
+    return listen<TranscriptSpeakerUpdate>('transcript-speaker-update', (event) => {
       callback(event.payload);
     });
   }
