@@ -118,7 +118,7 @@ interface LanguageSelectionProps {
   selectedLanguage: string;
   onLanguageChange: (language: string) => void;
   disabled?: boolean;
-  provider?: 'localWhisper' | 'parakeet' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
+  provider?: 'localWhisper' | 'parakeet' | 'nemotron' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
 }
 
 export function LanguageSelection({
@@ -131,7 +131,9 @@ export function LanguageSelection({
   const { setSelectedLanguage } = useConfig();
 
   // Parakeet only supports auto-detection (doesn't support manual language selection)
+  // Nemotron maps Meetily language prefs to locale codes, so full list is available
   const isParakeet = provider === 'parakeet';
+  const isNemotron = provider === 'nemotron';
   const availableLanguages = isParakeet
     ? LANGUAGES.filter(lang => lang.code === 'auto' || lang.code === 'auto-translate')
     : LANGUAGES;
@@ -202,6 +204,14 @@ export function LanguageSelection({
           <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800">
             <p className="font-medium">ℹ️ Parakeet Language Support</p>
             <p className="mt-1 text-xs">Parakeet currently only supports automatic language detection. Manual language selection is not available. Use Whisper if you need to specify a particular language.</p>
+          </div>
+        )}
+
+        {/* Nemotron multilingual note */}
+        {isNemotron && (
+          <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800">
+            <p className="font-medium">ℹ️ Nemotron Language Support</p>
+            <p className="mt-1 text-xs">Nemotron supports 40+ languages with streaming ASR. Select a language for best accuracy, or use auto-detect. Note: auto-translate is not supported — it maps to auto-detect.</p>
           </div>
         )}
 
