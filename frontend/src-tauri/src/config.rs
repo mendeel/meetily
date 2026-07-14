@@ -11,6 +11,10 @@ pub const DEFAULT_WHISPER_MODEL: &str = "large-v3-turbo";
 /// This is the quantized version optimized for speed.
 pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 
+/// Default Nemotron model for multilingual streaming transcription.
+/// INT8 ONNX bundle compatible with parakeet-rs ≥ 0.3.6.
+pub const DEFAULT_NEMOTRON_MODEL: &str = "nemotron-3.5-asr-streaming-0.6b-int8";
+
 /// Whisper model catalog with metadata for all supported models.
 /// Used by both WhisperEngine::discover_models() and discover_models_standalone().
 ///
