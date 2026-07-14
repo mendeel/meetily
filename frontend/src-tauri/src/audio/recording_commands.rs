@@ -250,8 +250,17 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     drop(engine_lifecycle_guard);
     reset_speech_detected_flag(); // Reset for new recording session
 
-    // Start optimized parallel transcription task and store handle
-    let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
+    // Start dual-stream transcription task (2 workers when mic+system captured)
+    let diarization_dir = crate::audio::diarization::commands::get_or_init_manager()
+        .ok()
+        .map(|m| m.models_dir().to_path_buf());
+    let dual_stream = true; // Default on when both mic and system are captured
+    let task_handle = transcription::start_transcription_task_with_options(
+        app.clone(),
+        transcription_receiver,
+        diarization_dir,
+        dual_stream,
+    );
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
@@ -275,6 +284,8 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
+                    channel: update.channel.clone(),
                 };
 
                 // Save to recording manager
@@ -294,7 +305,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     app.emit("recording-started", serde_json::json!({
         "message": "Recording started successfully with parallel processing",
         "devices": ["Default Microphone", "Default System Audio"],
-        "workers": 3
+        "workers": 2
     })).map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect recording state
@@ -421,8 +432,17 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     drop(engine_lifecycle_guard);
     reset_speech_detected_flag(); // Reset for new recording session
 
-    // Start optimized parallel transcription task and store handle
-    let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
+    // Start dual-stream transcription task (2 workers when mic+system captured)
+    let diarization_dir = crate::audio::diarization::commands::get_or_init_manager()
+        .ok()
+        .map(|m| m.models_dir().to_path_buf());
+    let dual_stream = true; // Default on when both mic and system are captured
+    let task_handle = transcription::start_transcription_task_with_options(
+        app.clone(),
+        transcription_receiver,
+        diarization_dir,
+        dual_stream,
+    );
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
@@ -446,6 +466,8 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
+                    channel: update.channel.clone(),
                 };
 
                 // Save to recording manager
@@ -468,7 +490,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             mic_device_name.unwrap_or_else(|| "Default Microphone".to_string()),
             system_device_name.unwrap_or_else(|| "Default System Audio".to_string())
         ],
-        "workers": 3
+        "workers": 2
     })).map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect recording state
