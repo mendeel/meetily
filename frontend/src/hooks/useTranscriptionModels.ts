@@ -8,7 +8,7 @@ export interface RawModelInfo {
 }
 
 export interface ModelOption {
-  provider: 'whisper' | 'parakeet';
+  provider: 'whisper' | 'parakeet' | 'nemotron';
   name: string;
   displayName: string;
   size_mb: number;
@@ -20,7 +20,8 @@ interface TranscriptModelConfig {
 }
 
 /**
- * Custom hook for fetching and managing transcription models (Whisper and Parakeet).
+ * Custom hook for fetching and managing transcription models
+ * (Whisper, Parakeet, and Nemotron).
  *
  * This hook centralizes the model fetching logic that was previously duplicated
  * in ImportAudioDialog and RetranscribeDialog components.
@@ -77,6 +78,22 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
       console.error('Failed to fetch Parakeet models:', err);
     }
 
+    // Fetch Nemotron models
+    try {
+      const nemotronModels = await invoke<RawModelInfo[]>('nemotron_get_available_models');
+      const availableNemotron = nemotronModels
+        .filter((m) => m.status === 'Available')
+        .map((m) => ({
+          provider: 'nemotron' as const,
+          name: m.name,
+          displayName: `🌐 Nemotron: ${m.name}`,
+          size_mb: m.size_mb,
+        }));
+      allModels.push(...availableNemotron);
+    } catch (err) {
+      console.error('Failed to fetch Nemotron models:', err);
+    }
+
     setAvailableModels(allModels);
 
     // Set default model based on user's saved configuration
@@ -88,7 +105,8 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     const configuredMatch = allModels.find(
       (m) =>
         (configuredProvider === 'localWhisper' && m.provider === 'whisper' && m.name === configuredModel) ||
-        (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel)
+        (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel) ||
+        (configuredProvider === 'nemotron' && m.provider === 'nemotron' && m.name === configuredModel)
     );
 
     // Only set default model if user hasn't manually selected one

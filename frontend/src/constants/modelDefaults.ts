@@ -16,10 +16,17 @@ export const DEFAULT_WHISPER_MODEL = 'large-v3-turbo';
 export const DEFAULT_PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 
 /**
+ * Default Nemotron model for transcription when no preference is configured.
+ * Multilingual streaming int8 ONNX bundle.
+ */
+export const DEFAULT_NEMOTRON_MODEL = 'nemotron-3.5-asr-streaming-0.6b-int8';
+
+/**
  * Model defaults by provider type
  */
 export const MODEL_DEFAULTS = {
   whisper: DEFAULT_WHISPER_MODEL,
   localWhisper: DEFAULT_WHISPER_MODEL,
   parakeet: DEFAULT_PARAKEET_MODEL,
+  nemotron: DEFAULT_NEMOTRON_MODEL,
 } as const;
