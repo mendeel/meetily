@@ -123,6 +123,9 @@ pub struct MeetingDetails {
     pub created_at: String,
     pub updated_at: String,
     pub transcripts: Vec<MeetingTranscript>,
+    /// Speaker id → display name aliases for this meeting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_aliases: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -151,6 +154,9 @@ pub struct MeetingMetadata {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    /// Speaker id → display name aliases for this meeting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_aliases: Option<HashMap<String, String>>,
 }
 
 /// Paginated transcripts response with total count
@@ -834,6 +840,9 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 folder_path: meeting.folder_path,
+                speaker_aliases: crate::database::repositories::meeting::parse_speaker_aliases(
+                    &meeting.speaker_aliases,
+                ),
             })
         }
         Ok(None) => {
@@ -843,6 +852,72 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
         Err(e) => {
             log_error!("Error retrieving meeting metadata {}: {}", meeting_id, e);
             Err(format!("Failed to retrieve meeting metadata: {}", e))
+        }
+    }
+}
+
+/// Set or clear a speaker display-name alias for a meeting.
+/// Empty `display_name` removes the alias (restores default label).
+#[tauri::command]
+pub async fn api_set_speaker_alias<R: Runtime>(
+    _app: AppHandle<R>,
+    meeting_id: String,
+    speaker_id: String,
+    display_name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<HashMap<String, String>, String> {
+    log_info!(
+        "api_set_speaker_alias called for meeting_id: {}, speaker_id: {}",
+        meeting_id,
+        speaker_id
+    );
+
+    let pool = state.db_manager.pool();
+
+    match MeetingsRepository::set_speaker_alias(pool, &meeting_id, &speaker_id, &display_name).await
+    {
+        Ok(aliases) => {
+            log_info!(
+                "Successfully updated speaker alias for meeting {} ({} aliases)",
+                meeting_id,
+                aliases.len()
+            );
+            Ok(aliases)
+        }
+        Err(sqlx::Error::RowNotFound) => {
+            log_warn!("Meeting not found: {}", meeting_id);
+            Err(format!("Meeting not found: {}", meeting_id))
+        }
+        Err(e) => {
+            log_error!("Error setting speaker alias for {}: {}", meeting_id, e);
+            Err(format!("Failed to set speaker alias: {}", e))
+        }
+    }
+}
+
+/// Distinct speaker IDs in a meeting's transcripts (for Speakers panel).
+#[tauri::command]
+pub async fn api_get_meeting_speakers<R: Runtime>(
+    _app: AppHandle<R>,
+    meeting_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    log_info!("api_get_meeting_speakers called for meeting_id: {}", meeting_id);
+
+    let pool = state.db_manager.pool();
+
+    match MeetingsRepository::get_meeting_speakers(pool, &meeting_id).await {
+        Ok(speakers) => {
+            log_info!(
+                "Found {} distinct speakers for meeting {}",
+                speakers.len(),
+                meeting_id
+            );
+            Ok(speakers)
+        }
+        Err(e) => {
+            log_error!("Error getting speakers for meeting {}: {}", meeting_id, e);
+            Err(format!("Failed to get meeting speakers: {}", e))
         }
     }
 }
@@ -1022,9 +1097,7 @@ pub async fn open_meeting_folder<R: Runtime>(
     let pool = state.db_manager.pool();
 
     // Get meeting with folder_path
-    let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
-    )
+    let meeting: Option<MeetingModel> = sqlx::query_as("SELECT * FROM meetings WHERE id = ?")
     .bind(&meeting_id)
     .fetch_optional(pool)
     .await
